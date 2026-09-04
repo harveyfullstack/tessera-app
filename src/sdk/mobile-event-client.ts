@@ -29,7 +29,7 @@ export class MobileEventClient {
 
   constructor(
     private readonly deliver: (event: MobileEvent) => void,
-    private readonly bufferCapacity = 100,
+    private readonly bufferCapacity = 4,
   ) {
     this.buffer = new Array(bufferCapacity);
   }
