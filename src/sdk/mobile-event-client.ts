@@ -5,7 +5,8 @@ export type MobileEvent = {
 
 export type TrackResult =
   | { status: "delivered" }
-  | { status: "dropped"; reason: "not_initialized" };
+  | { status: "buffered" }
+  | { status: "dropped"; reason: "buffer_full" };
 
 export type MobileEventClientStats = {
   initialized: boolean;
@@ -21,22 +22,47 @@ export class MobileEventClient {
   private tracked = 0;
   private delivered = 0;
   private droppedBeforeInitialization = 0;
+  private readonly buffer: Array<MobileEvent | undefined>;
+  private head = 0;
+  private buffered = 0;
+  private initializing = false;
 
   constructor(
     private readonly deliver: (event: MobileEvent) => void,
     private readonly bufferCapacity = 100,
-  ) {}
+  ) {
+    this.buffer = new Array(bufferCapacity);
+  }
 
   initialize(): void {
-    this.initialized = true;
+    if (this.initialized || this.initializing) return;
+    this.initializing = true;
+    try {
+      while (this.buffered > 0) {
+        const event = this.buffer[this.head]!;
+        this.deliver(event);
+        this.buffer[this.head] = undefined;
+        this.head = (this.head + 1) % this.bufferCapacity;
+        this.buffered -= 1;
+        this.delivered += 1;
+      }
+      this.initialized = true;
+    } finally {
+      this.initializing = false;
+    }
   }
 
   track(event: MobileEvent): TrackResult {
     this.tracked += 1;
 
     if (!this.initialized) {
-      this.droppedBeforeInitialization += 1;
-      return { status: "dropped", reason: "not_initialized" };
+      if (this.buffered === this.bufferCapacity) {
+        this.droppedBeforeInitialization += 1;
+        return { status: "dropped", reason: "buffer_full" };
+      }
+      this.buffer[(this.head + this.buffered) % this.bufferCapacity] = event;
+      this.buffered += 1;
+      return { status: "buffered" };
     }
 
     this.deliver(event);
@@ -48,7 +74,7 @@ export class MobileEventClient {
     return {
       initialized: this.initialized,
       bufferCapacity: this.bufferCapacity,
-      buffered: 0,
+      buffered: this.buffered,
       tracked: this.tracked,
       delivered: this.delivered,
       droppedBeforeInitialization: this.droppedBeforeInitialization,
