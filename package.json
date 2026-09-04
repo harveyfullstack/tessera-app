@@ -1,0 +1,18 @@
+{
+  "name": "tessera-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fictional product-intelligence application for software workflow demonstrations",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/bun": "latest"
+  }
+}
