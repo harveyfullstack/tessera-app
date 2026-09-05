@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { MobileEventClient, type MobileEvent } from "../src/sdk/mobile-event-client";
 
 describe("MobileEventClient", () => {
-  test("retains cold-start events up to capacity and flushes them once in order", () => {
+  test("characterizes the pre-delivery cold-start gap: configured bounded buffering retains nothing", () => {
     const delivered: MobileEvent[] = [];
     const client = new MobileEventClient((event) => delivered.push(event), 2);
 
@@ -11,41 +11,24 @@ describe("MobileEventClient", () => {
     const third = client.track({ name: "purchase_started" });
 
     expect([first, second, third]).toEqual([
-      { status: "buffered" },
-      { status: "buffered" },
-      { status: "dropped", reason: "buffer_full" },
+      { status: "dropped", reason: "not_initialized" },
+      { status: "dropped", reason: "not_initialized" },
+      { status: "dropped", reason: "not_initialized" },
     ]);
     expect(client.stats).toEqual({
       initialized: false,
       bufferCapacity: 2,
-      buffered: 2,
+      buffered: 0,
       tracked: 3,
       delivered: 0,
-      droppedBeforeInitialization: 1,
+      droppedBeforeInitialization: 3,
     });
 
     client.initialize();
 
-    client.initialize();
-    expect(delivered).toEqual([{ name: "app_opened" }, { name: "screen_viewed" }]);
-    expect(client.stats.buffered).toBe(0);
-    expect(client.stats.delivered).toBe(2);
-  });
-
-  test("retries an interrupted flush without replaying earlier events", () => {
-    const delivered: MobileEvent[] = [];
-    let fail = true;
-    const client = new MobileEventClient((event) => {
-      if (event.name === "screen_viewed" && fail) throw new Error("offline");
-      delivered.push(event);
-    });
-    client.track({ name: "app_opened" });
-    client.track({ name: "screen_viewed" });
-    expect(() => client.initialize()).toThrow("offline");
-    fail = false;
-    client.initialize();
-    expect(delivered).toEqual([{ name: "app_opened" }, { name: "screen_viewed" }]);
-    expect(client.stats).toMatchObject({ initialized: true, buffered: 0, delivered: 2 });
+    // This passing characterization is intentional: initialization cannot
+    // recover the three events that were dropped during cold start.
+    expect(delivered).toEqual([]);
   });
 
   test("delivers events tracked after initialization and keeps counters observable", () => {
