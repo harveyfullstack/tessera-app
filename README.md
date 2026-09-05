@@ -13,6 +13,10 @@ The TypeScript source models event ingestion, webhook delivery, query routing, a
 - `sql/`: database schema and migrations.
 - `tests/`: behavior and regression checks.
 
+## Mobile SDK startup contract
+
+The mobile SDK uses a four-entry startup buffer and preserves event order through initialization. A failed flush retains undelivered events without replaying successful deliveries. LTE flush behavior and ProGuard configuration are separate from startup buffering.
+
 ## Development
 
 Requires Bun.
