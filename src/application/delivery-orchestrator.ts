@@ -30,7 +30,8 @@ export class DeliveryOrchestrator {
       },
     );
 
-    if (job.status === "running") {
+    const status = await this.jobRecords.displayStatus(job);
+    if (status === "running") {
       throw new JobAlreadyRunningError(job.id);
     }
 
@@ -40,7 +41,6 @@ export class DeliveryOrchestrator {
       await this.jobRecords.retry(job.id);
       return this.jobRecords.markFailed(job.id, "Simulated webhook delivery failure", {
         workerId: req.workerId,
-        attemptNumber: job.retryCount + 1,
         responseStatus: 503,
         errorBody: "endpoint returned 503 after 30s timeout",
       });
@@ -48,7 +48,6 @@ export class DeliveryOrchestrator {
 
     return this.jobRecords.markCompleted(job.id, {
       workerId: req.workerId,
-      attemptNumber: job.retryCount + 1,
       responseStatus: 200,
       responseLatencyMs: 187,
     });

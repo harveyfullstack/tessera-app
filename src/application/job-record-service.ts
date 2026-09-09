@@ -5,11 +5,22 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import type { DeliveryAttemptRollbackFlags } from "./delivery-attempt-rollback-flags";
+import type { AccountRetryBudget } from "./account-retry-budget";
+
+const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
+
+export type DisplayStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stuck" | "dlq";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly attemptRpc: DeliveryAttemptRpc,
+    private readonly rollbackFlags: DeliveryAttemptRollbackFlags,
+    private readonly retryBudgets: AccountRetryBudget,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -18,21 +29,11 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
     return this.jobs.create(input);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.attemptRpc.markRunning(jobId, workerId);
   }
 
   async markFailed(
@@ -40,37 +41,15 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.attemptRpc.markFailed(jobId, errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.attemptRpc.markCompleted(jobId, details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.attemptRpc.retry(jobId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
@@ -90,13 +69,35 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<DisplayStatus> {
+    if (this.rollbackFlags.isRollbackEnabled(job.accountId)) {
+      return (job.status ?? "queued") as DisplayStatus;
+    }
+
+    const latest = await this.attemptRpc.getLatestAttempt(job.id);
+    if (!latest) {
+      return "queued";
+    }
+
+    const budget = this.retryBudgets.getRetryBudget(job.accountId);
+    const attemptCount = await this.attemptRpc.countAttempts(job.id);
+    const effectiveAttempts = Math.max(attemptCount, job.retryCount);
+    if (effectiveAttempts >= budget) {
+      return "dlq";
+    }
+
+    if (latest.status === "running") {
+      const ageMs = Date.now() - latest.startedAt.getTime();
+      if (ageMs > STUCK_THRESHOLD_MS) {
+        return "stuck";
+      }
+    }
+
+    return latest.status as DisplayStatus;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
 }
