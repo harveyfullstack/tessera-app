@@ -7,12 +7,15 @@ import {
   type DeliveryAttemptFlagSource,
 } from "./delivery-attempt-flags";
 
+const STUCK_AFTER_MS = 5 * 60 * 1000;
+
 export class DeliveryAttemptRpc {
   private readonly tails = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly store: DeliveryStore,
     private readonly flags: DeliveryAttemptFlagSource = envDeliveryAttemptFlags,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
@@ -120,6 +123,38 @@ export class DeliveryAttemptRpc {
 
   async listAttempts(jobId: string): Promise<DeliveryAttempt[]> {
     return this.store.listAttempts(jobId);
+  }
+
+  async latestAttempt(jobId: string): Promise<DeliveryAttempt | null> {
+    const attempts = await this.store.listAttempts(jobId);
+    return attempts.reduce<DeliveryAttempt | null>((latest, attempt) => {
+      if (!latest || attempt.attemptNumber > latest.attemptNumber) {
+        return attempt;
+      }
+
+      return latest;
+    }, null);
+  }
+
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.flags.isRollbackEnabled()) {
+      return job.status ?? "queued";
+    }
+
+    const latest = await this.latestAttempt(job.id);
+    if (!latest) {
+      return "queued";
+    }
+
+    if (
+      latest.status === "running" &&
+      latest.startedAt !== undefined &&
+      this.now().getTime() - latest.startedAt.getTime() > STUCK_AFTER_MS
+    ) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 
   private async requireJob(jobId: string): Promise<JobRecord> {

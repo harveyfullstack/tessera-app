@@ -28,7 +28,13 @@ export const server = Bun.serve({
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const jobs = await Promise.all(
+          rows.map(async (job) => ({
+            ...job,
+            displayStatus: await jobRecords.displayStatus(job),
+          })),
+        );
+        return Response.json({ jobs });
       }
     }
 

@@ -5,7 +5,6 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
@@ -72,13 +71,12 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    return this.attemptRpc.displayStatus(job);
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
+    return status !== "running" && status !== "stuck";
   }
 }
