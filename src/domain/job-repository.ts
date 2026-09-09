@@ -20,3 +20,5 @@ export interface DeliveryAttemptRepository {
   insertAttempt(input: CreateDeliveryAttemptInput): Promise<DeliveryAttempt>;
   listAttempts(deliveryJobId: string): Promise<DeliveryAttempt[]>;
 }
+
+export type DeliveryStore = JobRepository & DeliveryAttemptRepository;

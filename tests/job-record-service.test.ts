@@ -33,7 +33,7 @@ describe("JobRecordService", () => {
     expect(second.id).toBe(first.id);
   });
 
-  test("mutates the same row across retries and overwrites terminal execution details", async () => {
+  test("preserves every retry as an append-only delivery attempt", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo);
 
@@ -46,9 +46,15 @@ describe("JobRecordService", () => {
 
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
-    expect(final.errorMessage).toBeUndefined();
+
+    const history = await service.listAttempts(job.id);
+    expect(history.map((attempt) => attempt.status)).toEqual([
+      "running",
+      "queued",
+      "failed",
+      "running",
+    ]);
+    expect(history.some((attempt) => attempt.errorBody === "endpoint timeout after 30s")).toBe(true);
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
