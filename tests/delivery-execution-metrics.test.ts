@@ -25,12 +25,20 @@ const baseJob: JobRecord = {
 };
 
 describe("delivery execution metrics", () => {
-  test("legacy terminal counts treat queued jobs as zero attempts", () => {
+  test("legacy terminal counts treat a fresh queued job as zero attempts", () => {
     expect(legacyTerminalAttemptCount({ ...baseJob, status: "queued", retryCount: 0 })).toBe(0);
+  });
+
+  test("legacy terminal counts preserve prior failures for a requeued job with retry history", () => {
+    expect(legacyTerminalAttemptCount({ ...baseJob, status: "queued", retryCount: 2 })).toBe(2);
   });
 
   test("legacy terminal counts include a completed recovery attempt", () => {
     expect(legacyTerminalAttemptCount({ ...baseJob, status: "completed", retryCount: 2 })).toBe(3);
+  });
+
+  test("legacy terminal counts floor an immediate failure at one attempt", () => {
+    expect(legacyTerminalAttemptCount({ ...baseJob, status: "failed", retryCount: 0 })).toBe(1);
   });
 
   test("terminal attempt rows exclude lifecycle bookkeeping", () => {

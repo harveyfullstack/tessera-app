@@ -153,6 +153,7 @@ SELECT
     WHEN dj.status = 'completed' AND series.attempt_number = terminal_counts.terminal_count THEN 'completed'
     WHEN dj.status = 'running' AND series.attempt_number = terminal_counts.terminal_count THEN 'running'
     WHEN dj.status = 'cancelled' AND series.attempt_number = terminal_counts.terminal_count THEN 'cancelled'
+    WHEN dj.status = 'queued' AND series.attempt_number = terminal_counts.terminal_count THEN 'queued'
     ELSE 'failed'
   END,
   NULL,
@@ -170,8 +171,21 @@ FROM delivery_jobs dj
 JOIN LATERAL (
   SELECT
     CASE
-      WHEN dj.status = 'queued' THEN 0
+      -- Fresh queued: no history at all, zero attempt rows.
+      WHEN dj.status = 'queued' AND dj.retry_count = 0 THEN 0
+      -- Requeued-with-history: retry_count prior failures + the current
+      -- queued row itself (queued IS a tracked attempt status; RPC.retry
+      -- appends one on every requeue). Must NOT drop the latest queued row.
+      WHEN dj.status = 'queued' THEN dj.retry_count + 1
+      -- Recovered after retries: retry_count prior failures + the completed row.
       WHEN dj.status = 'completed' THEN dj.retry_count + 1
+      -- In-flight or halted mid-retry: retry_count prior failures + the
+      -- current running/cancelled row. Must NOT collapse to retry_count alone
+      -- (that silently drops the oldest prior failure).
+      WHEN dj.status = 'running' THEN dj.retry_count + 1
+      WHEN dj.status = 'cancelled' THEN dj.retry_count + 1
+      -- Failed-terminal: legacy retry_count already counts every failed
+      -- execution including the current one.
       ELSE GREATEST(dj.retry_count, 1)
     END AS terminal_count
 ) terminal_counts ON TRUE

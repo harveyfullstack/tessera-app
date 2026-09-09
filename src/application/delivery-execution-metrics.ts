@@ -34,11 +34,11 @@ export function legacyFailedExecutionCount(job: JobRecord): number {
 }
 
 export function legacyTerminalAttemptCount(job: JobRecord): number {
-  if (job.status === "queued") {
-    return 0;
-  }
   if (job.status === "completed") {
     return job.retryCount + 1;
+  }
+  if (job.status === "failed") {
+    return Math.max(job.retryCount, 1);
   }
   return job.retryCount;
 }
