@@ -12,13 +12,14 @@ export class JobRecordService {
   constructor(private readonly jobs: JobRepository) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
-    const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
+    const existing = await this.jobs.findByIntentKey(input.accountId, input.briefId, input.type);
     const canonical = existing[0];
     if (canonical) {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // Unique (account_id, brief_id, type) is enforced at the table. A racy
+    // repository that skips the constraint can still insert duplicates.
     return this.jobs.create(input);
   }
 

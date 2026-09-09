@@ -32,7 +32,8 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Execution columns remain for rollback dual-write. After cutover the
+  // append-only delivery_attempts table is the source of truth.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;

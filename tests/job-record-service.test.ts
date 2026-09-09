@@ -74,6 +74,14 @@ class RacyJobRepository implements JobRepository {
     return [];
   }
 
+  async findByIntentKey(
+    _accountId: string,
+    _briefId: string,
+    _type: JobType,
+  ): Promise<JobRecord[]> {
+    return [];
+  }
+
   async findById(jobId: string): Promise<JobRecord | null> {
     return this.jobs.get(jobId) ?? null;
   }
