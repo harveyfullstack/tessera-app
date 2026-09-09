@@ -1,4 +1,5 @@
 import { JobAlreadyRunningError } from "../domain/errors";
+import { DrainDlqProcessor } from "./drain-dlq-processor";
 import { JobRecordService } from "./job-record-service";
 import type { JobRecord } from "../domain/job";
 
@@ -15,7 +16,10 @@ export interface DeliverRequest {
 }
 
 export class DeliveryOrchestrator {
-  constructor(private readonly jobRecords: JobRecordService) {}
+  constructor(
+    private readonly jobRecords: JobRecordService,
+    private readonly drainDlq: DrainDlqProcessor = new DrainDlqProcessor(jobRecords),
+  ) {}
 
   async deliver(req: DeliverRequest): Promise<JobRecord> {
     const job = await this.jobRecords.ensureWebhookDispatchJob(
@@ -38,12 +42,14 @@ export class DeliveryOrchestrator {
 
     if (req.simulateFailure) {
       await this.jobRecords.retry(job.id);
-      return this.jobRecords.markFailed(job.id, "Simulated webhook delivery failure", {
+      const failed = await this.jobRecords.markFailed(job.id, "Simulated webhook delivery failure", {
         workerId: req.workerId,
         attemptNumber: job.retryCount + 1,
         responseStatus: 503,
         errorBody: "endpoint returned 503 after 30s timeout",
       });
+      await this.drainDlq.drain(req.accountId, req.briefId);
+      return failed;
     }
 
     return this.jobRecords.markCompleted(job.id, {
