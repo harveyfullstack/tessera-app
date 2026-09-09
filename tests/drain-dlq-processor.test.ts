@@ -28,7 +28,7 @@ function createProcessor(budget = 8) {
   retryBudgets.setRetryBudget("acct-1", budget);
   const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
   const jobRecords = new JobRecordService(jobs, attemptRpc, rollbackFlags, retryBudgets);
-  const processor = new DrainDlqProcessor(jobRecords, attemptRpc, retryBudgets);
+  const processor = new DrainDlqProcessor(jobRecords, attemptRpc, retryBudgets, rollbackFlags);
 
   return { processor, jobRecords, attempts };
 }

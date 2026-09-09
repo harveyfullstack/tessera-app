@@ -20,7 +20,7 @@ export function createDeliveryAppContext() {
     retryBudgets,
   );
   const delivery = new DeliveryOrchestrator(jobRecords);
-  const drainDlq = new DrainDlqProcessor(jobRecords, attemptRpc, retryBudgets);
+  const drainDlq = new DrainDlqProcessor(jobRecords, attemptRpc, retryBudgets, rollbackFlags);
 
   return {
     jobRepository,

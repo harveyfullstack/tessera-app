@@ -1,3 +1,7 @@
+import {
+  isJobInDlq,
+  legacyFailedExecutionCount,
+} from "./delivery-execution-metrics";
 import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
@@ -69,20 +73,54 @@ export class JobRecordService {
     });
   }
 
-  async displayStatus(job: JobRecord): Promise<DisplayStatus> {
-    if (this.rollbackFlags.isRollbackEnabled(job.accountId)) {
-      return (job.status ?? "queued") as DisplayStatus;
+  private async currentJob(job: JobRecord): Promise<JobRecord> {
+    const fresh = await this.jobs.findById(job.id);
+    if (!fresh) {
+      throw new JobNotFoundError(job.id);
+    }
+    return fresh;
+  }
+
+  async isInDlq(job: JobRecord): Promise<boolean> {
+    const current = await this.currentJob(job);
+    const budget = this.retryBudgets.getRetryBudget(current.accountId);
+
+    if (this.rollbackFlags.isRollbackEnabled(current.accountId)) {
+      return isJobInDlq(current, legacyFailedExecutionCount(current), budget);
     }
 
-    const latest = await this.attemptRpc.getLatestAttempt(job.id);
+    const failedCount = await this.attemptRpc.countFailedExecutions(current.id);
+    const latest = await this.attemptRpc.getLatestAttempt(current.id);
+
+    if (latest?.status === "completed") {
+      return false;
+    }
+
+    return isJobInDlq(current, failedCount, budget);
+  }
+
+  async displayStatus(job: JobRecord): Promise<DisplayStatus> {
+    const current = await this.currentJob(job);
+    const budget = this.retryBudgets.getRetryBudget(current.accountId);
+
+    if (this.rollbackFlags.isRollbackEnabled(current.accountId)) {
+      if (isJobInDlq(current, legacyFailedExecutionCount(current), budget)) {
+        return "dlq";
+      }
+      return (current.status ?? "queued") as DisplayStatus;
+    }
+
+    const latest = await this.attemptRpc.getLatestAttempt(current.id);
     if (!latest) {
       return "queued";
     }
 
-    const budget = this.retryBudgets.getRetryBudget(job.accountId);
-    const attemptCount = await this.attemptRpc.countAttempts(job.id);
-    const effectiveAttempts = Math.max(attemptCount, job.retryCount);
-    if (effectiveAttempts >= budget) {
+    if (latest.status === "completed") {
+      return "completed";
+    }
+
+    const failedCount = await this.attemptRpc.countFailedExecutions(current.id);
+    if (isJobInDlq(current, failedCount, budget) && latest.status === "failed") {
       return "dlq";
     }
 

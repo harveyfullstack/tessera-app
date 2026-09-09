@@ -1,3 +1,4 @@
+import { countFailedDeliveryExecutions } from "./delivery-execution-metrics";
 import { JobNotFoundError } from "../domain/errors";
 import type { DeliveryAttemptRepository } from "../domain/delivery-attempt-repository";
 import type { DeliveryAttemptRecord } from "../domain/delivery-attempt";
@@ -107,6 +108,11 @@ export class DeliveryAttemptRpc {
 
   async countAttempts(jobId: string): Promise<number> {
     return this.attempts.countByJobId(jobId);
+  }
+
+  async countFailedExecutions(jobId: string): Promise<number> {
+    const attempts = await this.attempts.listByJobId(jobId);
+    return countFailedDeliveryExecutions(attempts);
   }
 
   private async requireJob(jobId: string): Promise<JobRecord> {

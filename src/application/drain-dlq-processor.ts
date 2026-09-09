@@ -1,7 +1,15 @@
+import {
+  DLQ_BOOKKEEPING_MARKER,
+  isDiagnosticDeliveryAttempt,
+  isJobAlreadyDrained,
+  isJobInDlq,
+  legacyFailedExecutionCount,
+} from "./delivery-execution-metrics";
 import { JobRecordService } from "./job-record-service";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { AccountRetryBudget } from "./account-retry-budget";
-import type { JobMetadata, JobRecord } from "../domain/job";
+import type { DeliveryAttemptRollbackFlags } from "./delivery-attempt-rollback-flags";
+import type { JobRecord } from "../domain/job";
 
 export interface DrainDlqRequest {
   accountId: string;
@@ -24,6 +32,7 @@ export class DrainDlqProcessor {
     private readonly jobRecords: JobRecordService,
     private readonly attemptRpc: DeliveryAttemptRpc,
     private readonly retryBudgets: AccountRetryBudget,
+    private readonly rollbackFlags: DeliveryAttemptRollbackFlags,
   ) {}
 
   async ensureDrainJob(accountId: string, briefId: string): Promise<JobRecord> {
@@ -53,22 +62,29 @@ export class DrainDlqProcessor {
         continue;
       }
 
-      const attemptCount = await this.attemptRpc.countAttempts(job.id);
-      const effectiveAttempts = Math.max(attemptCount, job.retryCount);
-      if (effectiveAttempts >= budget) {
-        await this.jobRecords.markFailed(
-          job.id,
-          `Moved to dead letter queue after ${effectiveAttempts} attempts`,
-          {
-            errorBody: `DLQ: exceeded retry budget of ${budget}`,
-          },
-        );
+      if (isJobAlreadyDrained(job)) {
+        continue;
       }
+
+      const failedCount = this.rollbackFlags.isRollbackEnabled(request.accountId)
+        ? legacyFailedExecutionCount(job)
+        : await this.attemptRpc.countFailedExecutions(job.id);
+
+      if (!isJobInDlq(job, failedCount, budget)) {
+        continue;
+      }
+
+      await this.jobRecords.markFailed(
+        job.id,
+        `${DLQ_BOOKKEEPING_MARKER} after ${failedCount} failed delivery executions`,
+        {
+          errorBody: `DLQ: exceeded retry budget of ${budget}`,
+        },
+      );
     }
 
     return this.jobRecords.markCompleted(drainJob.id, {
       workerId: "dlq-drainer",
-      attemptNumber: 1,
     });
   }
 
@@ -82,9 +98,8 @@ export class DrainDlqProcessor {
         continue;
       }
 
-      const attempts = await this.attemptRpc.listAttempts(job.id);
-      const effectiveAttempts = Math.max(attempts.length, job.retryCount);
-      if (effectiveAttempts < budget) {
+      const inDlq = await this.jobRecords.isInDlq(job);
+      if (!inDlq) {
         continue;
       }
 
@@ -96,7 +111,10 @@ export class DrainDlqProcessor {
       };
 
       existing.pastBudgetCount += 1;
-      const attemptBodies = attempts
+
+      const attempts = await this.attemptRpc.listAttempts(job.id);
+      const diagnosticAttempts = attempts
+        .filter(isDiagnosticDeliveryAttempt)
         .slice(0, 3)
         .map((attempt) => ({
           attemptNumber: attempt.attemptNumber,
@@ -105,7 +123,7 @@ export class DrainDlqProcessor {
           responseStatus: attempt.responseStatus,
         }));
 
-      existing.lastAttempts = mergeLatestAttempts(existing.lastAttempts, attemptBodies);
+      existing.lastAttempts = mergeLatestAttempts(existing.lastAttempts, diagnosticAttempts);
       byEndpoint.set(endpointUrl, existing);
     }
 

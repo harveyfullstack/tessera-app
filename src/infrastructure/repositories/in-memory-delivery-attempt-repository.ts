@@ -1,5 +1,8 @@
 import { randomUUID } from "crypto";
-import type { DeliveryAttemptRepository } from "../../domain/delivery-attempt-repository";
+import {
+  DuplicateAttemptNumberError,
+  type DeliveryAttemptRepository,
+} from "../../domain/delivery-attempt-repository";
 import type {
   CreateDeliveryAttemptInput,
   DeliveryAttemptRecord,
@@ -12,6 +15,15 @@ export class InMemoryDeliveryAttemptRepository implements DeliveryAttemptReposit
   async insert(
     input: CreateDeliveryAttemptInput & { attemptNumber: number },
   ): Promise<DeliveryAttemptRecord> {
+    const duplicate = [...this.attempts.values()].find(
+      (attempt) =>
+        attempt.deliveryJobId === input.deliveryJobId &&
+        attempt.attemptNumber === input.attemptNumber,
+    );
+    if (duplicate) {
+      throw new DuplicateAttemptNumberError(input.deliveryJobId, input.attemptNumber);
+    }
+
     const now = new Date();
     const record: DeliveryAttemptRecord = {
       id: randomUUID(),
@@ -28,7 +40,8 @@ export class InMemoryDeliveryAttemptRepository implements DeliveryAttemptReposit
     };
 
     this.attempts.set(record.id, record);
-    this.attemptNumbers.set(input.deliveryJobId, input.attemptNumber);
+    const current = this.attemptNumbers.get(input.deliveryJobId) ?? 0;
+    this.attemptNumbers.set(input.deliveryJobId, Math.max(current, input.attemptNumber));
     return record;
   }
 
