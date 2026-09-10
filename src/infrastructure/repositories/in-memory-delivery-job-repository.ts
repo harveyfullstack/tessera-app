@@ -34,10 +34,11 @@ export class InMemoryDeliveryJobRepository implements DeliveryJobRepository {
   }
 
   async create(input: CreateJobInput): Promise<DeliveryJob> {
-    const existing = await this.findByAccountBriefAndType(
-      input.accountId,
-      input.briefId,
-      input.type,
+    const existing = [...this.jobs.values()].find(
+      (job) =>
+        job.accountId === input.accountId &&
+        job.briefId === input.briefId &&
+        job.type === input.type,
     );
     if (existing) {
       throw new DuplicateDeliveryJobError(input.accountId, input.briefId, input.type);

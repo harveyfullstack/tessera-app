@@ -1,9 +1,18 @@
+import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
+import { InMemoryRollbackFeatureFlag } from "../infrastructure/in-memory-rollback-feature-flag";
+import { InMemoryDeliveryJobRepository } from "../infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const deliveryJobRepository = new InMemoryDeliveryJobRepository();
+const attemptRpc = new DeliveryAttemptRpc(
+  jobRepository,
+  deliveryJobRepository,
+  new InMemoryRollbackFeatureFlag(),
+);
+const jobRecords = new JobRecordService(jobRepository, attemptRpc);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {

@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
 import { JobRecordService } from "../src/application/job-record-service";
+import { InMemoryRollbackFeatureFlag } from "../src/infrastructure/in-memory-rollback-feature-flag";
+import { InMemoryDeliveryJobRepository } from "../src/infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
+
+function createService() {
+  const jobs = new InMemoryJobRepository();
+  const rpc = new DeliveryAttemptRpc(
+    jobs,
+    new InMemoryDeliveryJobRepository(),
+    new InMemoryRollbackFeatureFlag(),
+  );
+  return new JobRecordService(jobs, rpc);
+}
 
 const baseRequest = {
   accountId: "acct-1",
@@ -16,7 +29,7 @@ const baseRequest = {
 
 describe("DeliveryOrchestrator", () => {
   test("completes a happy-path webhook delivery", async () => {
-    const service = new JobRecordService(new InMemoryJobRepository());
+    const service = createService();
     const orchestrator = new DeliveryOrchestrator(service);
 
     const result = await orchestrator.deliver({
@@ -29,7 +42,7 @@ describe("DeliveryOrchestrator", () => {
   });
 
   test("marks a failed run and increments retry count when simulateFailure is set", async () => {
-    const service = new JobRecordService(new InMemoryJobRepository());
+    const service = createService();
     const orchestrator = new DeliveryOrchestrator(service);
 
     const result = await orchestrator.deliver({
