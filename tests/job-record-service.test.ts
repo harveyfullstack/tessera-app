@@ -109,6 +109,35 @@ describe("JobRecordService", () => {
     ]);
     expect(canonicalA.id).toBe(canonicalB.id);
   });
+
+  test("derives queued display status when no attempts exist", async () => {
+    const { service } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("derives stuck display status from stale running attempts", async () => {
+    const { service, attempts } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+
+    const staleStart = new Date(Date.now() - 6 * 60 * 1000);
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 1,
+      status: "running",
+      startedAt: staleStart,
+    });
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+  });
+
+  test("falls back to jobs.status when rollback flag is enabled", async () => {
+    const { service } = createService(true);
+    const job = await service.ensureJobRecord(baseInput);
+    const failed = await service.markFailed(job.id, "legacy failure");
+
+    expect(await service.displayStatus(failed)).toBe("failed");
+  });
 });
 
 class RacyJobRepository implements JobRepository {
