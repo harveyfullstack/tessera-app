@@ -69,18 +69,28 @@ describe("JobRecordService", () => {
 class RacyUniqueJobRepository implements JobRepository {
   private jobs = new Map<string, JobRecord>();
   created: JobRecord[] = [];
+  private staleReadsRemaining = 2;
 
   async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
     return [];
   }
 
   async findByAccountBriefAndType(
-    _accountId: string,
-    _briefId: string,
-    _type: JobType,
+    accountId: string,
+    briefId: string,
+    type: JobType,
   ): Promise<JobRecord | null> {
-    // Stale read window where concurrent callers both observe no row.
-    return null;
+    // First two reads simulate the race window; recovery reads see the winner.
+    if (this.staleReadsRemaining > 0) {
+      this.staleReadsRemaining -= 1;
+      return null;
+    }
+
+    return (
+      [...this.jobs.values()].find(
+        (job) => job.accountId === accountId && job.briefId === briefId && job.type === type,
+      ) ?? null
+    );
   }
 
   async findById(jobId: string): Promise<JobRecord | null> {
