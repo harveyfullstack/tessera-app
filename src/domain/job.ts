@@ -7,12 +7,19 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+export interface DlqEndpointSummary {
+  endpointUrl: string;
+  jobId: string;
+  lastAttemptBodies: string[];
+}
+
 export interface JobMetadata {
   customerId: string;
   subscriptionId: string;
   endpointUrl: string;
   eventType: string;
   payloadHash: string;
+  dlqEndpoints?: DlqEndpointSummary[] | undefined;
 }
 
 export interface JobExecutionDetails {
@@ -32,7 +39,9 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Rollback snapshot of the pre-split jobs row. Intent lives on delivery_jobs;
+  // execution history lives on delivery_attempts. These fields stay writable
+  // only when the rollback flag is on.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;

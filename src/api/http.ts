@@ -1,10 +1,12 @@
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
+import { DrainDlqProcessor } from "../application/drain-dlq-processor";
 import { JobRecordService } from "../application/job-record-service";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
 const jobRecords = new JobRecordService(jobRepository);
 const delivery = new DeliveryOrchestrator(jobRecords);
+const drainDlq = new DrainDlqProcessor(jobRepository, jobRecords);
 
 interface DeliverBody {
   briefId: string;
@@ -27,8 +29,9 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const status = url.searchParams.get("status") ?? undefined;
+        const body = await drainDlq.listJobs(accountId, briefId, status);
+        return Response.json(body);
       }
     }
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { JobRecordService } from "../src/application/job-record-service";
+import { DuplicateDeliveryJobError } from "../src/domain/errors";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
@@ -46,13 +47,16 @@ describe("JobRecordService", () => {
 
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
     expect(final.errorMessage).toBeUndefined();
+
+    const attempts = await service.listAttempts(job.id);
+    expect(attempts.some((attempt) => attempt.errorBody === "endpoint timeout after 30s")).toBe(
+      true,
+    );
   });
 
-  test("can produce duplicate intent rows under race conditions", async () => {
-    const repo = new RacyJobRepository();
+  test("recovers a single intent row when concurrent creates race the unique key", async () => {
+    const repo = new RacyUniqueJobRepository();
     const service = new JobRecordService(repo);
 
     const [a, b] = await Promise.all([
@@ -60,18 +64,36 @@ describe("JobRecordService", () => {
       service.ensureJobRecord(baseInput),
     ]);
 
-    expect(a.id).not.toBe(b.id);
-    expect(repo.created.length).toBe(2);
+    expect(a.id).toBe(b.id);
+    expect(repo.created).toHaveLength(1);
   });
 });
 
-class RacyJobRepository implements JobRepository {
+class RacyUniqueJobRepository implements JobRepository {
   private jobs = new Map<string, JobRecord>();
   created: JobRecord[] = [];
+  private staleReadsRemaining = 2;
 
   async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
-    // Stale read window where concurrent callers both observe no row.
     return [];
+  }
+
+  async findByAccountBriefAndType(
+    accountId: string,
+    briefId: string,
+    type: JobType,
+  ): Promise<JobRecord | null> {
+    // First two reads simulate the race window; recovery reads see the winner.
+    if (this.staleReadsRemaining > 0) {
+      this.staleReadsRemaining -= 1;
+      return null;
+    }
+
+    return (
+      [...this.jobs.values()].find(
+        (job) => job.accountId === accountId && job.briefId === briefId && job.type === type,
+      ) ?? null
+    );
   }
 
   async findById(jobId: string): Promise<JobRecord | null> {
@@ -79,10 +101,19 @@ class RacyJobRepository implements JobRepository {
   }
 
   async create(input: CreateJobInput): Promise<JobRecord> {
+    const duplicate = [...this.jobs.values()].find(
+      (job) =>
+        job.accountId === input.accountId &&
+        job.briefId === input.briefId &&
+        job.type === input.type,
+    );
+    if (duplicate) {
+      throw new DuplicateDeliveryJobError(input.accountId, input.briefId, input.type);
+    }
+
     const now = new Date();
-    const id = crypto.randomUUID();
     const record: JobRecord = {
-      id,
+      id: crypto.randomUUID(),
       accountId: input.accountId,
       briefId: input.briefId,
       taskId: input.taskId,
@@ -95,7 +126,7 @@ class RacyJobRepository implements JobRepository {
       updatedAt: now,
     };
 
-    this.jobs.set(id, record);
+    this.jobs.set(record.id, record);
     this.created.push(record);
     return record;
   }
@@ -135,5 +166,21 @@ class RacyJobRepository implements JobRepository {
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return [...this.jobs.values()].filter((job) => job.briefId === briefId);
+  }
+
+  async insertAttempt(): Promise<never> {
+    throw new Error("not implemented");
+  }
+
+  async listAttempts(): Promise<never> {
+    throw new Error("not implemented");
+  }
+
+  async getLatestAttempt(): Promise<never> {
+    throw new Error("not implemented");
+  }
+
+  async deleteDeliveryJob(jobId: string): Promise<void> {
+    this.jobs.delete(jobId);
   }
 }
