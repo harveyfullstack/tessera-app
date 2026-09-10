@@ -1,7 +1,7 @@
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { createJobServiceGraph } from "../application/job-service-factory";
 
-const { jobRecords } = createJobServiceGraph();
+const { jobRecords, drainDlq } = createJobServiceGraph();
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -25,8 +25,12 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const status = url.searchParams.get("status");
+        const listing = await drainDlq.listJobs(
+          briefId,
+          status ? { status } : undefined,
+        );
+        return Response.json(listing);
       }
     }
 
