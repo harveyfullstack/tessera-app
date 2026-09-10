@@ -1,9 +1,8 @@
+import { createDeliveryRuntime } from "../application/delivery-runtime";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
-import { JobRecordService } from "../application/job-record-service";
-import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
-const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const runtime = createDeliveryRuntime();
+const jobRecords = runtime.jobRecords;
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {

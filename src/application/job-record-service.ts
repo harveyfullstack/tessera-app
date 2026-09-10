@@ -7,9 +7,13 @@ import type {
   JobRecord,
   JobType,
 } from "../domain/job";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly rpc: DeliveryAttemptRpc,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -18,21 +22,13 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // Intent creation stays on jobs for the rollback bar. Execution writes
+    // go through DeliveryAttemptRpc, which is the only flag boundary.
     return this.jobs.create(input);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.rpc.markRunning(await this.requireJob(jobId), workerId);
   }
 
   async markFailed(
@@ -40,37 +36,15 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.rpc.markFailed(await this.requireJob(jobId), errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.rpc.markCompleted(await this.requireJob(jobId), details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.rpc.retry(await this.requireJob(jobId));
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
@@ -98,5 +72,13 @@ export class JobRecordService {
   static canStartNewDelivery(job: JobRecord): boolean {
     const status = JobRecordService.displayStatus(job) as JobType | string;
     return status !== "running";
+  }
+
+  private async requireJob(jobId: string): Promise<JobRecord> {
+    const existing = await this.jobs.findById(jobId);
+    if (!existing) {
+      throw new JobNotFoundError(jobId);
+    }
+    return existing;
   }
 }

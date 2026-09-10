@@ -1,4 +1,4 @@
-import type { JobMetadata, JobStatus, JobType } from "./job";
+import type { JobMetadata, JobRecord, JobStatus, JobType } from "./job";
 
 export interface DeliveryJob {
   id: string;
@@ -85,4 +85,51 @@ export function oldAttemptCountFromJob(job: {
   }
 
   return job.retryCount + 1;
+}
+
+export function jobRecordFromDelivery(
+  job: Pick<
+    JobRecord,
+    | "id"
+    | "accountId"
+    | "briefId"
+    | "taskId"
+    | "parentJobId"
+    | "type"
+    | "metadata"
+    | "createdAt"
+  >,
+  attempts: readonly DeliveryAttempt[],
+): JobRecord {
+  const latest = attempts.reduce<DeliveryAttempt | undefined>((current, attempt) => {
+    if (!current || attempt.attemptNumber > current.attemptNumber) {
+      return attempt;
+    }
+    return current;
+  }, undefined);
+
+  const retryCount = attempts.filter((attempt) => attempt.status === "queued").length;
+  const completed =
+    latest &&
+    (latest.status === "completed" || latest.status === "failed" || latest.status === "cancelled")
+      ? latest.createdAt
+      : undefined;
+
+  return {
+    id: job.id,
+    accountId: job.accountId,
+    briefId: job.briefId,
+    taskId: job.taskId,
+    parentJobId: job.parentJobId,
+    type: job.type,
+    metadata: job.metadata,
+    status: latest?.status ?? "queued",
+    workerId: latest?.workerId,
+    retryCount,
+    errorMessage: latest?.errorBody,
+    startedAt: latest?.startedAt,
+    completedAt: completed,
+    createdAt: job.createdAt,
+    updatedAt: latest?.createdAt ?? job.createdAt,
+  };
 }
