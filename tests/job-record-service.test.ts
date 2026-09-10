@@ -29,14 +29,12 @@ function createService(
   jobs: JobRepository = new InMemoryJobRepository(),
   deliveryJobs = new InMemoryDeliveryJobRepository(),
   rollbackAccounts: readonly string[] = [],
+  now: () => Date = () => new Date(),
 ) {
-  const attempts = new DeliveryAttemptRpc(
-    jobs,
-    deliveryJobs,
-    new InMemoryRollbackFeatureFlag(rollbackAccounts),
-  );
+  const rollbackFlag = new InMemoryRollbackFeatureFlag(rollbackAccounts);
+  const attempts = new DeliveryAttemptRpc(jobs, deliveryJobs, rollbackFlag);
   return {
-    service: new JobRecordService(jobs, attempts),
+    service: new JobRecordService(jobs, attempts, deliveryJobs, rollbackFlag, now),
     jobs,
     deliveryJobs,
   };
@@ -92,6 +90,110 @@ describe("JobRecordService", () => {
 
     expect(a.id).not.toBe(b.id);
     expect(repo.created.length).toBe(2);
+  });
+
+  test("displayStatus is queued when the job has no delivery attempts", async () => {
+    const { service } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("displayStatus is queued when a delivery job exists but the attempt list is empty", async () => {
+    const { service, deliveryJobs } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+    await deliveryJobs.create(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("displayStatus reads the latest attempt by attempt_number", async () => {
+    const { service } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    expect(await service.displayStatus(job)).toBe("running");
+
+    await service.markFailed(job.id, "endpoint timeout after 30s");
+    expect(await service.displayStatus(job)).toBe("failed");
+
+    await service.retry(job.id);
+    expect(await service.displayStatus(job)).toBe("queued");
+
+    const completed = await service.markCompleted(job.id, {
+      workerId: "worker-us-east-07",
+      responseStatus: 200,
+      responseLatencyMs: 187,
+    });
+    expect(await service.displayStatus(completed)).toBe("completed");
+  });
+
+  test("displayStatus is stuck when the latest running attempt started more than 5 minutes ago", async () => {
+    const now = new Date("2026-09-10T16:00:00.000Z");
+    const { service, deliveryJobs } = createService(
+      new InMemoryJobRepository(),
+      new InMemoryDeliveryJobRepository(),
+      [],
+      () => now,
+    );
+    const job = await service.ensureJobRecord(baseInput);
+    const deliveryJob = await deliveryJobs.create(baseInput);
+    await deliveryJobs.appendAttempt({
+      deliveryJobId: deliveryJob.id,
+      attemptNumber: 1,
+      status: "failed",
+      startedAt: new Date(now.getTime() - 20 * 60 * 1000),
+    });
+    await deliveryJobs.appendAttempt({
+      deliveryJobId: deliveryJob.id,
+      attemptNumber: 2,
+      workerId: "worker-us-east-04",
+      status: "running",
+      startedAt: new Date(now.getTime() - 5 * 60 * 1000 - 1),
+    });
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+  });
+
+  test("displayStatus stays running when started_at is exactly 5 minutes ago", async () => {
+    const now = new Date("2026-09-10T16:00:00.000Z");
+    const { service, deliveryJobs } = createService(
+      new InMemoryJobRepository(),
+      new InMemoryDeliveryJobRepository(),
+      [],
+      () => now,
+    );
+    const job = await service.ensureJobRecord(baseInput);
+    const deliveryJob = await deliveryJobs.create(baseInput);
+    await deliveryJobs.appendAttempt({
+      deliveryJobId: deliveryJob.id,
+      attemptNumber: 1,
+      workerId: "worker-us-east-04",
+      status: "running",
+      startedAt: new Date(now.getTime() - 5 * 60 * 1000),
+    });
+
+    expect(await service.displayStatus(job)).toBe("running");
+  });
+
+  test("displayStatus falls back to jobs.status when the rollback flag is on", async () => {
+    const now = new Date("2026-09-10T16:00:00.000Z");
+    const jobs = new InMemoryJobRepository();
+    const deliveryJobs = new InMemoryDeliveryJobRepository();
+    const { service } = createService(jobs, deliveryJobs, [baseInput.accountId], () => now);
+    const job = await service.ensureJobRecord(baseInput);
+    const failed = await service.markFailed(job.id, "legacy row failure");
+    const deliveryJob = await deliveryJobs.create(baseInput);
+    await deliveryJobs.appendAttempt({
+      deliveryJobId: deliveryJob.id,
+      attemptNumber: 1,
+      workerId: "worker-us-east-04",
+      status: "running",
+      startedAt: new Date(now.getTime() - 10 * 60 * 1000),
+    });
+
+    expect(failed.status).toBe("failed");
+    expect(await service.displayStatus(failed)).toBe("failed");
   });
 });
 

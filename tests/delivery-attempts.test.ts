@@ -24,6 +24,9 @@ const baseInput: CreateJobInput = {
 const migration = await Bun.file(
   new URL("../sql/migrations/002_delivery_jobs_and_attempts.sql", import.meta.url),
 ).text();
+const startedAtMigration = await Bun.file(
+  new URL("../sql/migrations/003_delivery_attempts_started_at.sql", import.meta.url),
+).text();
 
 describe("delivery_jobs / delivery_attempts schema", () => {
   test("delivery_jobs is unique on (account_id, brief_id, type)", () => {
@@ -43,6 +46,10 @@ describe("delivery_jobs / delivery_attempts schema", () => {
   test("FK from delivery_attempts to delivery_jobs has no ON DELETE CASCADE", () => {
     expect(migration).toMatch(/delivery_job_id UUID NOT NULL REFERENCES delivery_jobs\(id\)/);
     expect(migration).not.toMatch(/ON DELETE CASCADE/);
+  });
+
+  test("delivery_attempts gains started_at for the stuck derivation", () => {
+    expect(startedAtMigration).toContain("ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ");
   });
 });
 

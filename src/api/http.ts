@@ -7,12 +7,18 @@ import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-
 
 const jobRepository = new InMemoryJobRepository();
 const deliveryJobRepository = new InMemoryDeliveryJobRepository();
+const rollbackFlag = new InMemoryRollbackFeatureFlag();
 const attemptRpc = new DeliveryAttemptRpc(
   jobRepository,
   deliveryJobRepository,
-  new InMemoryRollbackFeatureFlag(),
+  rollbackFlag,
 );
-const jobRecords = new JobRecordService(jobRepository, attemptRpc);
+const jobRecords = new JobRecordService(
+  jobRepository,
+  attemptRpc,
+  deliveryJobRepository,
+  rollbackFlag,
+);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {

@@ -34,7 +34,7 @@ export class DeliveryAttemptRpc {
           workerId,
           details: { workerId },
         }),
-      { status: "running", workerId },
+      { status: "running", workerId, startedAt: new Date() },
     );
   }
 
@@ -191,7 +191,8 @@ export class DeliveryAttemptRpc {
       errorMessage: attempt.errorBody,
       retryCount: history.filter((row) => row.status === "queued").length,
       updatedAt: attempt.createdAt,
-      startedAt: attempt.status === "running" ? attempt.createdAt : job.startedAt,
+      startedAt:
+        attempt.status === "running" ? (attempt.startedAt ?? attempt.createdAt) : job.startedAt,
       completedAt: terminal ? attempt.createdAt : job.completedAt,
     };
   }

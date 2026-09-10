@@ -79,6 +79,7 @@ export interface DeliveryAttempt {
   responseStatus?: number | undefined;
   responseLatencyMs?: number | undefined;
   errorBody?: string | undefined;
+  startedAt?: Date | undefined;
   createdAt: Date;
 }
 
@@ -90,4 +91,5 @@ export interface CreateDeliveryAttemptInput {
   responseStatus?: number | undefined;
   responseLatencyMs?: number | undefined;
   errorBody?: string | undefined;
+  startedAt?: Date | undefined;
 }

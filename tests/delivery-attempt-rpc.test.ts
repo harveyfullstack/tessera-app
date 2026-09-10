@@ -30,7 +30,7 @@ function createStack(rollbackAccounts: readonly string[] = []) {
     deliveryJobs,
     rollbackFlag,
     rpc,
-    service: new JobRecordService(jobs, rpc),
+    service: new JobRecordService(jobs, rpc, deliveryJobs, rollbackFlag),
   };
 }
 

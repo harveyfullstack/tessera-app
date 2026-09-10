@@ -1,17 +1,24 @@
+import type { DeliveryJobRepository } from "../domain/delivery-job-repository";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttempt,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+import type { RollbackFeatureFlag } from "../domain/rollback-feature-flag";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+
+const STUCK_AFTER_MS = 5 * 60 * 1000;
 
 export class JobRecordService {
   constructor(
     private readonly jobs: JobRepository,
     private readonly attempts: DeliveryAttemptRpc,
+    private readonly deliveryJobs: DeliveryJobRepository,
+    private readonly rollbackFlag: RollbackFeatureFlag,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
@@ -62,13 +69,42 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.rollbackFlag.isEnabled(job.accountId)) {
+      return job.status;
+    }
+
+    const latest = await this.latestAttempt(job);
+    if (!latest) {
+      return "queued";
+    }
+
+    if (latest.status === "running") {
+      const startedAt = latest.startedAt ?? latest.createdAt;
+      if (this.now().getTime() - startedAt.getTime() > STUCK_AFTER_MS) {
+        return "stuck";
+      }
+    }
+
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
+  }
+
+  private async latestAttempt(job: JobRecord): Promise<DeliveryAttempt | undefined> {
+    const deliveryJob = await this.deliveryJobs.findByAccountBriefAndType(
+      job.accountId,
+      job.briefId,
+      job.type,
+    );
+    if (!deliveryJob) {
+      return undefined;
+    }
+
+    const history = await this.deliveryJobs.listAttempts(deliveryJob.id);
+    return history[0];
   }
 }

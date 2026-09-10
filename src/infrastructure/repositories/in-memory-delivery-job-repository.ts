@@ -73,6 +73,7 @@ export class InMemoryDeliveryJobRepository implements DeliveryJobRepository {
       throw new DuplicateDeliveryAttemptError(input.deliveryJobId, input.attemptNumber);
     }
 
+    const createdAt = new Date();
     const attempt: DeliveryAttempt = {
       id: randomUUID(),
       deliveryJobId: input.deliveryJobId,
@@ -82,7 +83,8 @@ export class InMemoryDeliveryJobRepository implements DeliveryJobRepository {
       responseStatus: input.responseStatus,
       responseLatencyMs: input.responseLatencyMs,
       errorBody: input.errorBody,
-      createdAt: new Date(),
+      startedAt: input.startedAt ?? (input.status === "running" ? createdAt : undefined),
+      createdAt,
     };
 
     this.attempts.set(attempt.id, attempt);

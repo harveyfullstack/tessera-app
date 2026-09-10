@@ -2,18 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
 import { JobRecordService } from "../src/application/job-record-service";
+import { JobAlreadyRunningError } from "../src/domain/errors";
 import { InMemoryRollbackFeatureFlag } from "../src/infrastructure/in-memory-rollback-feature-flag";
 import { InMemoryDeliveryJobRepository } from "../src/infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 
 function createService() {
   const jobs = new InMemoryJobRepository();
-  const rpc = new DeliveryAttemptRpc(
-    jobs,
-    new InMemoryDeliveryJobRepository(),
-    new InMemoryRollbackFeatureFlag(),
-  );
-  return new JobRecordService(jobs, rpc);
+  const deliveryJobs = new InMemoryDeliveryJobRepository();
+  const rollbackFlag = new InMemoryRollbackFeatureFlag();
+  const rpc = new DeliveryAttemptRpc(jobs, deliveryJobs, rollbackFlag);
+  return new JobRecordService(jobs, rpc, deliveryJobs, rollbackFlag);
 }
 
 const baseRequest = {
@@ -53,5 +52,26 @@ describe("DeliveryOrchestrator", () => {
     expect(result.status).toBe("failed");
     expect(result.retryCount).toBe(1);
     expect(result.errorMessage).toContain("Simulated webhook delivery failure");
+  });
+
+  test("rejects a second deliver while the latest attempt is running", async () => {
+    const service = createService();
+    const orchestrator = new DeliveryOrchestrator(service);
+    const job = await service.ensureWebhookDispatchJob(
+      baseRequest.accountId,
+      baseRequest.briefId,
+      {
+        customerId: baseRequest.customerId,
+        subscriptionId: baseRequest.subscriptionId,
+        endpointUrl: baseRequest.endpointUrl,
+        eventType: baseRequest.eventType,
+        payloadHash: baseRequest.payloadHash,
+      },
+    );
+    await service.markRunning(job.id, baseRequest.workerId);
+
+    await expect(orchestrator.deliver({ ...baseRequest })).rejects.toBeInstanceOf(
+      JobAlreadyRunningError,
+    );
   });
 });
