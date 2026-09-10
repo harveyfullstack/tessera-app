@@ -64,6 +64,38 @@ describe("JobRecordService", () => {
     expect(repo.created.length).toBe(2);
   });
 
+  test("derives display status from MAX(attempt_number) and marks stale running attempts stuck", async () => {
+    const { jobRecords, deliveryAttempts } = createDeliveryRuntime();
+    const job = await jobRecords.ensureJobRecord(baseInput);
+
+    expect(await jobRecords.displayStatus(job)).toBe("queued");
+
+    await jobRecords.markRunning(job.id, "worker-us-east-04");
+    const latest = await deliveryAttempts.findLatestByDeliveryJobId(job.id);
+    expect(latest?.attemptNumber).toBe(1);
+    expect(await jobRecords.displayStatus(job)).toBe("running");
+
+    const sixMinutesLater = new Date((latest?.startedAt ?? new Date()).getTime() + 6 * 60 * 1000);
+    expect(await jobRecords.displayStatus(job, sixMinutesLater)).toBe("stuck");
+    expect(await jobRecords.canStartNewDelivery(job, sixMinutesLater)).toBe(true);
+
+    await jobRecords.markFailed(job.id, "endpoint timeout after 30s");
+    expect(await jobRecords.displayStatus(job, sixMinutesLater)).toBe("failed");
+  });
+
+  test("falls back to jobs.status for displayStatus when rollback is enabled", async () => {
+    const flags = new InMemoryDeliverySplitFlags();
+    const { jobRecords, deliveryAttempts } = createDeliveryRuntime({ flags });
+    const job = await jobRecords.ensureJobRecord(baseInput);
+
+    await jobRecords.markRunning(job.id, "worker-us-east-04");
+    expect(await deliveryAttempts.listByDeliveryJobId(job.id)).toHaveLength(1);
+    expect(await jobRecords.displayStatus(job)).toBe("running");
+
+    flags.enableRollback(baseInput.accountId);
+    expect(await jobRecords.displayStatus(job)).toBe("queued");
+  });
+
   test("falls back to mutating jobs when the rollback feature flag is on", async () => {
     const flags = new InMemoryDeliverySplitFlags();
     flags.enableRollback(baseInput.accountId);

@@ -30,7 +30,7 @@ export function createDeliveryRuntime(options?: {
   const deliveryAttempts = options?.deliveryAttempts ?? new InMemoryDeliveryAttemptRepository();
   const flags = options?.flags ?? new InMemoryDeliverySplitFlags();
   const rpc = new DeliveryAttemptRpc(flags, jobs, deliveryJobs, deliveryAttempts);
-  const jobRecords = new JobRecordService(jobs, rpc);
+  const jobRecords = new JobRecordService(jobs, rpc, flags, deliveryAttempts);
 
   return {
     jobs,

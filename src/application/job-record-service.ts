@@ -1,3 +1,5 @@
+import type { DeliveryAttempt } from "../domain/delivery";
+import type { DeliveryAttemptRepository } from "../domain/delivery-repository";
 import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
@@ -5,14 +7,37 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import type { DeliverySplitFlags } from "./delivery-split-flags";
+
+export const STUCK_RUNNING_AFTER_MS = 5 * 60 * 1000;
+
+export function deriveDisplayStatus(
+  latestAttempt: DeliveryAttempt | null,
+  now = new Date(),
+): string {
+  if (!latestAttempt) {
+    return "queued";
+  }
+
+  if (
+    latestAttempt.status === "running" &&
+    latestAttempt.startedAt !== undefined &&
+    now.getTime() - latestAttempt.startedAt.getTime() > STUCK_RUNNING_AFTER_MS
+  ) {
+    return "stuck";
+  }
+
+  return latestAttempt.status;
+}
 
 export class JobRecordService {
   constructor(
     private readonly jobs: JobRepository,
     private readonly rpc: DeliveryAttemptRpc,
+    private readonly flags: DeliverySplitFlags,
+    private readonly deliveryAttempts: DeliveryAttemptRepository,
   ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
@@ -64,13 +89,17 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord, now = new Date()): Promise<string> {
+    if (this.flags.isRollbackEnabled(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    const latest = await this.deliveryAttempts.findLatestByDeliveryJobId(job.id);
+    return deriveDisplayStatus(latest, now);
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord, now = new Date()): Promise<boolean> {
+    const status = await this.displayStatus(job, now);
     return status !== "running";
   }
 
