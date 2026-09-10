@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
+import { InMemoryDeliveryAttemptRollbackFlags } from "../src/application/delivery-attempt-rollback-flags";
 import { JobRecordService } from "../src/application/job-record-service";
+import { InMemoryDeliveryAttemptRepository } from "../src/infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
@@ -22,10 +25,23 @@ const baseInput: CreateJobInput = {
   },
 };
 
+function createService(rollback = false) {
+  const jobs = new InMemoryJobRepository();
+  const attempts = new InMemoryDeliveryAttemptRepository();
+  const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
+  const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
+  const service = new JobRecordService(jobs, attemptRpc);
+
+  if (rollback) {
+    rollbackFlags.enable("acct-1");
+  }
+
+  return { service, jobs, attempts, attemptRpc, rollbackFlags };
+}
+
 describe("JobRecordService", () => {
   test("reuses canonical job when one already exists", async () => {
-    const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const { service } = createService();
 
     const first = await service.ensureJobRecord(baseInput);
     const second = await service.ensureJobRecord(baseInput);
@@ -33,9 +49,8 @@ describe("JobRecordService", () => {
     expect(second.id).toBe(first.id);
   });
 
-  test("mutates the same row across retries and overwrites terminal execution details", async () => {
-    const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+  test("appends attempt rows instead of overwriting execution history", async () => {
+    const { service, attempts } = createService();
 
     const job = await service.ensureJobRecord(baseInput);
 
@@ -46,14 +61,32 @@ describe("JobRecordService", () => {
 
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
-    expect(final.errorMessage).toBeUndefined();
+
+    const history = await attempts.listByJobId(job.id);
+    expect(history.length).toBe(4);
+    expect(history[0]?.workerId).toBe("worker-us-east-07");
+    const failedAttempt = history.find((attempt) => attempt.status === "failed");
+    expect(failedAttempt?.errorBody).toBe("endpoint timeout after 30s");
+  });
+
+  test("skips attempt inserts when the rollback flag is on", async () => {
+    const { service, attempts } = createService(true);
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    await service.markFailed(job.id, "legacy failure");
+
+    expect(await attempts.countByJobId(job.id)).toBe(0);
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
+    const attempts = new InMemoryDeliveryAttemptRepository();
+    const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
     const repo = new RacyJobRepository();
-    const service = new JobRecordService(repo);
+    const service = new JobRecordService(
+      repo,
+      new DeliveryAttemptRpc(repo, attempts, rollbackFlags),
+    );
 
     const [a, b] = await Promise.all([
       service.ensureJobRecord(baseInput),
