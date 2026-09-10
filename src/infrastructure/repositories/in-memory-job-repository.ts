@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { DuplicateIntentError, JobNotFoundError } from "../../domain/errors";
+import { DuplicateAttemptError, DuplicateIntentError, JobNotFoundError } from "../../domain/errors";
 import type { JobRepository } from "../../domain/job-repository";
 import type {
   CreateDeliveryAttemptInput,
@@ -111,9 +111,7 @@ export class InMemoryJobRepository implements JobRepository {
         attempt.attemptNumber === input.attemptNumber,
     );
     if (duplicate) {
-      throw new Error(
-        `delivery_attempts unique (delivery_job_id, attempt_number) violated for ${input.deliveryJobId}/${input.attemptNumber}`,
-      );
+      throw new DuplicateAttemptError(input.deliveryJobId, input.attemptNumber);
     }
 
     const attempt: DeliveryAttempt = {

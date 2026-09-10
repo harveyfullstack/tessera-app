@@ -19,3 +19,14 @@ export class DuplicateIntentError extends Error {
     super(`Delivery job already exists for ${accountId}/${briefId}/${type}`);
   }
 }
+
+export class DuplicateAttemptError extends Error {
+  constructor(
+    readonly deliveryJobId: string,
+    readonly attemptNumber: number,
+  ) {
+    super(
+      `delivery_attempts unique (delivery_job_id, attempt_number) violated for ${deliveryJobId}/${attemptNumber}`,
+    );
+  }
+}
