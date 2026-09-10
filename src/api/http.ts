@@ -1,15 +1,7 @@
-import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
-import { InMemoryDeliverySplitFlags } from "../application/delivery-split-flags";
-import { JobRecordService } from "../application/job-record-service";
-import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
-import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
+import { createJobServiceGraph } from "../application/job-service-factory";
 
-const jobRepository = new InMemoryJobRepository();
-const attemptRepository = new InMemoryDeliveryAttemptRepository();
-const splitFlags = new InMemoryDeliverySplitFlags();
-const attemptRpc = new DeliveryAttemptRpc(jobRepository, attemptRepository, splitFlags);
-const jobRecords = new JobRecordService(jobRepository, attemptRpc);
+const { jobRecords } = createJobServiceGraph();
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -52,7 +44,7 @@ export const server = Bun.serve({
         simulateFailure: body.simulateFailure ?? false,
       });
 
-      return Response.json({ job: result });
+      return Response.json({ job: await jobRecords.toView(result) });
     }
 
     return new Response("Not found", { status: 404 });

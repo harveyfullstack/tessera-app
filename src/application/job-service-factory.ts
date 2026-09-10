@@ -30,6 +30,6 @@ export function createJobServiceGraph(options?: {
     attempts,
     flags,
     attemptRpc,
-    jobRecords: new JobRecordService(jobs, attemptRpc),
+    jobRecords: new JobRecordService(jobs, attemptRpc, attempts, flags),
   };
 }
