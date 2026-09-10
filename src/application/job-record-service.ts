@@ -95,15 +95,32 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.flags.isRollbackEnabled(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    const latest = await this.jobs.getLatestAttempt(job.id);
+    if (!latest) {
+      return "queued";
+    }
+
+    if (latest.status === "running" && latest.startedAt !== undefined) {
+      const ageMs = Date.now() - latest.startedAt.getTime();
+      if (ageMs > JobRecordService.STUCK_ATTEMPT_MS) {
+        return "stuck";
+      }
+    }
+
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
+
+  static readonly STUCK_ATTEMPT_MS = 5 * 60 * 1000;
 
   private async requireJob(jobId: string): Promise<JobRecord> {
     const existing = await this.jobs.findById(jobId);
