@@ -25,15 +25,18 @@ const baseInput: CreateJobInput = {
   },
 };
 
-function createService() {
+function createService(rollback = false) {
   const jobs = new InMemoryJobRepository();
   const attempts = new InMemoryDeliveryAttemptRepository();
   const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
   const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
-  return {
-    service: new JobRecordService(jobs, attemptRpc),
-    attempts,
-  };
+  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags);
+
+  if (rollback) {
+    rollbackFlags.enable("acct-1");
+  }
+
+  return { service, attempts, attemptRpc };
 }
 
 describe("JobRecordService", () => {
@@ -73,6 +76,7 @@ describe("JobRecordService", () => {
     const service = new JobRecordService(
       repo,
       new DeliveryAttemptRpc(repo, attempts, rollbackFlags),
+      rollbackFlags,
     );
 
     const [a, b] = await Promise.all([
@@ -82,6 +86,35 @@ describe("JobRecordService", () => {
 
     expect(a.id).not.toBe(b.id);
     expect(repo.created.length).toBe(2);
+  });
+
+  test("derives queued display status when no attempts exist", async () => {
+    const { service } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("derives stuck display status from stale running attempts", async () => {
+    const { service, attempts } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+
+    const staleStart = new Date(Date.now() - 6 * 60 * 1000);
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 1,
+      status: "running",
+      startedAt: staleStart,
+    });
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+  });
+
+  test("falls back to jobs.status when rollback flag is enabled", async () => {
+    const { service } = createService(true);
+    const job = await service.ensureJobRecord(baseInput);
+    const failed = await service.markFailed(job.id, "legacy failure");
+
+    expect(await service.displayStatus(failed)).toBe("failed");
   });
 });
 

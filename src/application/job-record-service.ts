@@ -1,17 +1,29 @@
+import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import type { DeliveryAttemptRollbackFlags } from "./delivery-attempt-rollback-flags";
+
+const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
+
+export type DisplayStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "stuck";
 
 export class JobRecordService {
   constructor(
     private readonly jobs: JobRepository,
     private readonly attemptRpc: DeliveryAttemptRpc,
+    private readonly rollbackFlags: DeliveryAttemptRollbackFlags,
   ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
@@ -21,7 +33,6 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
     return this.jobs.create(input);
   }
 
@@ -62,13 +73,38 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  private async currentJob(job: JobRecord): Promise<JobRecord> {
+    const fresh = await this.jobs.findById(job.id);
+    if (!fresh) {
+      throw new JobNotFoundError(job.id);
+    }
+    return fresh;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async displayStatus(job: JobRecord): Promise<DisplayStatus> {
+    const current = await this.currentJob(job);
+
+    if (this.rollbackFlags.isRollbackEnabled(current.accountId)) {
+      return (current.status ?? "queued") as DisplayStatus;
+    }
+
+    const latest = await this.attemptRpc.getLatestAttempt(current.id);
+    if (!latest) {
+      return "queued";
+    }
+
+    if (latest.status === "running") {
+      const ageMs = Date.now() - latest.startedAt.getTime();
+      if (ageMs > STUCK_THRESHOLD_MS) {
+        return "stuck";
+      }
+    }
+
+    return latest.status as DisplayStatus;
+  }
+
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
 }

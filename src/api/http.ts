@@ -9,7 +9,7 @@ const jobRepository = new InMemoryJobRepository();
 const attemptRepository = new InMemoryDeliveryAttemptRepository();
 const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
 const attemptRpc = new DeliveryAttemptRpc(jobRepository, attemptRepository, rollbackFlags);
-const jobRecords = new JobRecordService(jobRepository, attemptRpc);
+const jobRecords = new JobRecordService(jobRepository, attemptRpc, rollbackFlags);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
