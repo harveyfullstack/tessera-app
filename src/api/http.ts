@@ -1,9 +1,14 @@
 import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { InMemoryDeliveryAttemptRollbackFlags } from "../application/delivery-attempt-rollback-flags";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
-import { JobRecordService } from "../application/job-record-service";
+import { JobRecordService, type DisplayStatus } from "../application/job-record-service";
 import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
+import type { JobRecord } from "../domain/job";
+
+interface JobListItem extends JobRecord {
+  displayStatus: DisplayStatus;
+}
 
 const jobRepository = new InMemoryJobRepository();
 const attemptRepository = new InMemoryDeliveryAttemptRepository();
@@ -34,7 +39,11 @@ export const server = Bun.serve({
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const jobs: JobListItem[] = [];
+        for (const job of rows) {
+          jobs.push({ ...job, displayStatus: await jobRecords.displayStatus(job) });
+        }
+        return Response.json({ jobs });
       }
     }
 
