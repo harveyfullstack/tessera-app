@@ -7,9 +7,15 @@ import type {
   JobRecord,
   JobType,
 } from "../domain/job";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import type { DeliveryAttemptRollbackFlags } from "./delivery-attempt-rollback-flags";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly attemptRpc: DeliveryAttemptRpc,
+    private readonly rollbackFlags: DeliveryAttemptRollbackFlags,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -18,21 +24,11 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
     return this.jobs.create(input);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.attemptRpc.markRunning(jobId, workerId);
   }
 
   async markFailed(
@@ -40,37 +36,15 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.attemptRpc.markFailed(jobId, errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.attemptRpc.markCompleted(jobId, details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.attemptRpc.retry(jobId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
@@ -91,7 +65,6 @@ export class JobRecordService {
   }
 
   static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
     return job.status ?? "queued";
   }
 
