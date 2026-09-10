@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { InMemoryAccountRetryBudget } from "../src/application/account-retry-budget";
 import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { InMemoryDeliveryAttemptRollbackFlags } from "../src/application/delivery-attempt-rollback-flags";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
@@ -21,8 +22,9 @@ function createOrchestrator() {
   const jobs = new InMemoryJobRepository();
   const attempts = new InMemoryDeliveryAttemptRepository();
   const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
+  const retryBudgets = new InMemoryAccountRetryBudget();
   const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
-  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags);
+  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags, retryBudgets);
   return new DeliveryOrchestrator(service);
 }
 
