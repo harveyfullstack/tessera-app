@@ -47,9 +47,12 @@ describe("JobRecordService", () => {
 
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
     expect(final.errorMessage).toBeUndefined();
+
+    const attempts = await service.listAttempts(job.id);
+    expect(attempts.some((attempt) => attempt.errorBody === "endpoint timeout after 30s")).toBe(
+      true,
+    );
   });
 
   test("recovers a single intent row when concurrent creates race the unique key", async () => {

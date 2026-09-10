@@ -7,9 +7,21 @@ import type {
   JobRecord,
   JobType,
 } from "../domain/job";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import { DeliveryRollbackFlags } from "./delivery-rollback-flags";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  readonly flags: DeliveryRollbackFlags;
+  private readonly rpc: DeliveryAttemptRpc;
+
+  constructor(
+    private readonly jobs: JobRepository,
+    flags: DeliveryRollbackFlags = new DeliveryRollbackFlags(),
+    rpc?: DeliveryAttemptRpc,
+  ) {
+    this.flags = flags;
+    this.rpc = rpc ?? new DeliveryAttemptRpc(jobs, flags);
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByAccountBriefAndType(
@@ -39,16 +51,8 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    const existing = await this.requireJob(jobId);
+    return this.rpc.markRunning(existing, workerId);
   }
 
   async markFailed(
@@ -56,41 +60,26 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    const existing = await this.requireJob(jobId);
+    return this.rpc.markFailed(existing, errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    const existing = await this.requireJob(jobId);
+    return this.rpc.markCompleted(existing, details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    const existing = await this.requireJob(jobId);
+    return this.rpc.retry(existing);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return this.jobs.listByBrief(briefId);
+  }
+
+  async listAttempts(jobId: string) {
+    return this.jobs.listAttempts(jobId);
   }
 
   async ensureWebhookDispatchJob(
@@ -114,5 +103,13 @@ export class JobRecordService {
   static canStartNewDelivery(job: JobRecord): boolean {
     const status = JobRecordService.displayStatus(job) as JobType | string;
     return status !== "running";
+  }
+
+  private async requireJob(jobId: string): Promise<JobRecord> {
+    const existing = await this.jobs.findById(jobId);
+    if (!existing) {
+      throw new JobNotFoundError(jobId);
+    }
+    return existing;
   }
 }
