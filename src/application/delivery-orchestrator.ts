@@ -30,7 +30,7 @@ export class DeliveryOrchestrator {
       },
     );
 
-    if (job.status === "running") {
+    if (!(await this.jobRecords.canStartNewDelivery(job))) {
       throw new JobAlreadyRunningError(job.id);
     }
 

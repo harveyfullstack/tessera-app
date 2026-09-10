@@ -1,9 +1,27 @@
+import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
+import { InMemoryAccountRetryBudget } from "../infrastructure/in-memory-account-retry-budget";
+import { InMemoryRollbackFeatureFlag } from "../infrastructure/in-memory-rollback-feature-flag";
+import { InMemoryDeliveryJobRepository } from "../infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const deliveryJobRepository = new InMemoryDeliveryJobRepository();
+const rollbackFlag = new InMemoryRollbackFeatureFlag();
+const retryBudgets = new InMemoryAccountRetryBudget();
+const attemptRpc = new DeliveryAttemptRpc(
+  jobRepository,
+  deliveryJobRepository,
+  rollbackFlag,
+);
+const jobRecords = new JobRecordService(
+  jobRepository,
+  attemptRpc,
+  deliveryJobRepository,
+  rollbackFlag,
+  retryBudgets,
+);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -27,8 +45,8 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const status = url.searchParams.get("status") ?? undefined;
+        return Response.json(await jobRecords.listBriefJobs(briefId, status));
       }
     }
 
