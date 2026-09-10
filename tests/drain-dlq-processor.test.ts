@@ -52,9 +52,9 @@ describe("DrainDlqProcessor", () => {
     expect(result.movedJobIds).toEqual([job.id]);
     expect(runtime.dlq.isBound(job.id)).toBe(true);
     expect(runtime.dlq.listByBrief(briefId)[0]?.lastAttemptBodies).toEqual([
-      "body-8",
-      "body-7",
-      "body-6",
+      "attempt 8 failed",
+      "attempt 7 failed",
+      "attempt 6 failed",
     ]);
   });
 
@@ -110,7 +110,7 @@ describe("GET /briefs/:briefId/jobs", () => {
     expect(payload.dlq.endpoints).toEqual([
       {
         endpointUrl,
-        attemptBodies: ["body-3", "body-2", "body-1"],
+        attemptBodies: ["attempt 3 failed", "attempt 2 failed", "attempt 1 failed"],
       },
     ]);
   });
