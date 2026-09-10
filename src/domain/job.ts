@@ -7,12 +7,19 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+export interface DlqEndpointSummary {
+  endpointUrl: string;
+  jobId: string;
+  lastAttemptBodies: string[];
+}
+
 export interface JobMetadata {
   customerId: string;
   subscriptionId: string;
   endpointUrl: string;
   eventType: string;
   payloadHash: string;
+  dlqEndpoints?: DlqEndpointSummary[] | undefined;
 }
 
 export interface JobExecutionDetails {
