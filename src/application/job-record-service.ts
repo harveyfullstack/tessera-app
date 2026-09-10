@@ -1,4 +1,4 @@
-import { JobNotFoundError } from "../domain/errors";
+import { DuplicateDeliveryJobError, JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
@@ -12,14 +12,30 @@ export class JobRecordService {
   constructor(private readonly jobs: JobRepository) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
-    const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
-    const canonical = existing[0];
-    if (canonical) {
-      return canonical;
+    const existing = await this.jobs.findByAccountBriefAndType(
+      input.accountId,
+      input.briefId,
+      input.type,
+    );
+    if (existing) {
+      return existing;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
-    return this.jobs.create(input);
+    try {
+      return await this.jobs.create(input);
+    } catch (error) {
+      if (error instanceof DuplicateDeliveryJobError) {
+        const raced = await this.jobs.findByAccountBriefAndType(
+          input.accountId,
+          input.briefId,
+          input.type,
+        );
+        if (raced) {
+          return raced;
+        }
+      }
+      throw error;
+    }
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
