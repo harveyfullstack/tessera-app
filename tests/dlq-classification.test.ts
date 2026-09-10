@@ -153,6 +153,7 @@ describe("DLQ classification", () => {
     await jobRecords.retry(job.id);
     await jobRecords.markRunning(job.id, "worker-2");
     await jobRecords.markFailed(job.id, "second");
+    await jobRecords.retry(job.id);
 
     expect(await jobRecords.displayStatus(job)).toBe("dlq");
     expect(await jobRecords.isInDlq(job)).toBe(true);

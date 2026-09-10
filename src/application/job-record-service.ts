@@ -111,17 +111,13 @@ export class JobRecordService {
       return (current.status ?? "queued") as DisplayStatus;
     }
 
+    if (await this.isInDlq(current)) {
+      return "dlq";
+    }
+
     const latest = await this.attemptRpc.getLatestAttempt(current.id);
     if (!latest) {
       return "queued";
-    }
-
-    if (latest.status === "completed") {
-      return "completed";
-    }
-
-    if ((await this.isInDlq(current)) && latest.status === "failed") {
-      return "dlq";
     }
 
     if (latest.status === "running") {
