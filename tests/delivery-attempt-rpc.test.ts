@@ -3,6 +3,7 @@ import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { JobRecordService } from "../src/application/job-record-service";
 import { JobNotFoundError } from "../src/domain/errors";
 import type { CreateJobInput } from "../src/domain/job";
+import { InMemoryAccountRetryBudget } from "../src/infrastructure/in-memory-account-retry-budget";
 import { InMemoryRollbackFeatureFlag } from "../src/infrastructure/in-memory-rollback-feature-flag";
 import { InMemoryDeliveryJobRepository } from "../src/infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
@@ -30,7 +31,13 @@ function createStack(rollbackAccounts: readonly string[] = []) {
     deliveryJobs,
     rollbackFlag,
     rpc,
-    service: new JobRecordService(jobs, rpc, deliveryJobs, rollbackFlag),
+    service: new JobRecordService(
+      jobs,
+      rpc,
+      deliveryJobs,
+      rollbackFlag,
+      new InMemoryAccountRetryBudget(),
+    ),
   };
 }
 

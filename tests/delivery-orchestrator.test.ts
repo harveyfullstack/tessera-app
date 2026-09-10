@@ -3,6 +3,7 @@ import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
 import { JobRecordService } from "../src/application/job-record-service";
 import { JobAlreadyRunningError } from "../src/domain/errors";
+import { InMemoryAccountRetryBudget } from "../src/infrastructure/in-memory-account-retry-budget";
 import { InMemoryRollbackFeatureFlag } from "../src/infrastructure/in-memory-rollback-feature-flag";
 import { InMemoryDeliveryJobRepository } from "../src/infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
@@ -12,7 +13,13 @@ function createService() {
   const deliveryJobs = new InMemoryDeliveryJobRepository();
   const rollbackFlag = new InMemoryRollbackFeatureFlag();
   const rpc = new DeliveryAttemptRpc(jobs, deliveryJobs, rollbackFlag);
-  return new JobRecordService(jobs, rpc, deliveryJobs, rollbackFlag);
+  return new JobRecordService(
+    jobs,
+    rpc,
+    deliveryJobs,
+    rollbackFlag,
+    new InMemoryAccountRetryBudget(),
+  );
 }
 
 const baseRequest = {

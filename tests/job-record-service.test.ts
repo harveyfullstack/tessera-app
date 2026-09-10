@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { JobRecordService } from "../src/application/job-record-service";
+import { InMemoryAccountRetryBudget } from "../src/infrastructure/in-memory-account-retry-budget";
 import { InMemoryRollbackFeatureFlag } from "../src/infrastructure/in-memory-rollback-feature-flag";
 import { InMemoryDeliveryJobRepository } from "../src/infrastructure/repositories/in-memory-delivery-job-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
@@ -34,7 +35,14 @@ function createService(
   const rollbackFlag = new InMemoryRollbackFeatureFlag(rollbackAccounts);
   const attempts = new DeliveryAttemptRpc(jobs, deliveryJobs, rollbackFlag);
   return {
-    service: new JobRecordService(jobs, attempts, deliveryJobs, rollbackFlag, now),
+    service: new JobRecordService(
+      jobs,
+      attempts,
+      deliveryJobs,
+      rollbackFlag,
+      new InMemoryAccountRetryBudget(),
+      now,
+    ),
     jobs,
     deliveryJobs,
   };
