@@ -30,7 +30,8 @@ export class DeliveryOrchestrator {
       },
     );
 
-    if (job.status === "running") {
+    const status = await this.jobRecords.displayStatus(job);
+    if (status === "running" || status === "stuck") {
       throw new JobAlreadyRunningError(job.id);
     }
 

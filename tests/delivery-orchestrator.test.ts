@@ -22,7 +22,7 @@ function createOrchestrator() {
   const attempts = new InMemoryDeliveryAttemptRepository();
   const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
   const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
-  const service = new JobRecordService(jobs, attemptRpc);
+  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags);
   return { orchestrator: new DeliveryOrchestrator(service), attempts, service };
 }
 

@@ -30,7 +30,7 @@ function createService(rollback = false) {
   const attempts = new InMemoryDeliveryAttemptRepository();
   const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
   const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
-  const service = new JobRecordService(jobs, attemptRpc);
+  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags);
 
   if (rollback) {
     rollbackFlags.enable("acct-1");
@@ -86,6 +86,7 @@ describe("JobRecordService", () => {
     const service = new JobRecordService(
       repo,
       new DeliveryAttemptRpc(repo, attempts, rollbackFlags),
+      rollbackFlags,
     );
 
     const [a, b] = await Promise.all([
@@ -95,6 +96,59 @@ describe("JobRecordService", () => {
 
     expect(a.id).not.toBe(b.id);
     expect(repo.created.length).toBe(2);
+  });
+
+  test("derives queued display status when no attempts exist", async () => {
+    const { service } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("derives display status from the attempt with MAX(attempt_number)", async () => {
+    const { service, attempts } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 1,
+      status: "failed",
+      errorBody: "older",
+    });
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 3,
+      status: "completed",
+    });
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 2,
+      status: "running",
+    });
+
+    expect(await service.displayStatus(job)).toBe("completed");
+  });
+
+  test("derives stuck display status from stale running attempts", async () => {
+    const { service, attempts } = createService();
+    const job = await service.ensureJobRecord(baseInput);
+
+    const staleStart = new Date(Date.now() - 6 * 60 * 1000);
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 1,
+      status: "running",
+      startedAt: staleStart,
+    });
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+  });
+
+  test("falls back to jobs.status when rollback flag is enabled", async () => {
+    const { service } = createService(true);
+    const job = await service.ensureJobRecord(baseInput);
+    const failed = await service.markFailed(job.id, "legacy failure");
+
+    expect(await service.displayStatus(failed)).toBe("failed");
   });
 });
 

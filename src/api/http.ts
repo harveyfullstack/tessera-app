@@ -1,15 +1,16 @@
 import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { InMemoryDeliveryAttemptRollbackFlags } from "../application/delivery-attempt-rollback-flags";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
-import { JobRecordService } from "../application/job-record-service";
+import { JobRecordService, type DisplayStatus } from "../application/job-record-service";
 import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
+import type { JobRecord } from "../domain/job";
 
 const jobRepository = new InMemoryJobRepository();
 const attemptRepository = new InMemoryDeliveryAttemptRepository();
 const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
 const attemptRpc = new DeliveryAttemptRpc(jobRepository, attemptRepository, rollbackFlags);
-const jobRecords = new JobRecordService(jobRepository, attemptRpc);
+const jobRecords = new JobRecordService(jobRepository, attemptRpc, rollbackFlags);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -25,6 +26,10 @@ interface DeliverBody {
 
 const accountId = "tessera-demo-account";
 
+interface JobListItem extends JobRecord {
+  displayStatus: DisplayStatus;
+}
+
 export const server = Bun.serve({
   port: Number(process.env.PORT ?? "8787"),
   async fetch(req) {
@@ -34,7 +39,11 @@ export const server = Bun.serve({
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const enriched: JobListItem[] = [];
+        for (const job of rows) {
+          enriched.push({ ...job, displayStatus: await jobRecords.displayStatus(job) });
+        }
+        return Response.json({ jobs: enriched });
       }
     }
 
