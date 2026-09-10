@@ -2,12 +2,16 @@ import { DuplicateIntentError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttempt,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+
+export const STUCK_ATTEMPT_AFTER_MS = 5 * 60 * 1000;
+
+export type JobRecordView = JobRecord & { displayStatus: string };
 
 export class JobRecordService {
   private readonly rpc: DeliveryAttemptRpc;
@@ -60,8 +64,14 @@ export class JobRecordService {
     return this.rpc.retry(jobId);
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string): Promise<JobRecordView[]> {
+    const rows = await this.jobs.listByBrief(briefId);
+    return Promise.all(
+      rows.map(async (job) => ({
+        ...job,
+        displayStatus: await this.displayStatus(job),
+      })),
+    );
   }
 
   async ensureWebhookDispatchJob(
@@ -77,13 +87,36 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord, now: Date = new Date()): Promise<string> {
+    if (this.rpc.isRollbackEnabled()) {
+      return job.status ?? "queued";
+    }
+
+    const attempts = await this.jobs.listAttempts(job.id);
+    const latest = attempts.reduce<DeliveryAttempt | undefined>((current, attempt) => {
+      if (!current || attempt.attemptNumber > current.attemptNumber) {
+        return attempt;
+      }
+      return current;
+    }, undefined);
+
+    if (!latest) {
+      return "queued";
+    }
+
+    if (
+      latest.status === "running" &&
+      latest.startedAt !== undefined &&
+      now.getTime() - latest.startedAt.getTime() > STUCK_ATTEMPT_AFTER_MS
+    ) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord, now: Date = new Date()): Promise<boolean> {
+    const status = await this.displayStatus(job, now);
     return status !== "running";
   }
 }

@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { JobRecordService } from "../src/application/job-record-service";
+import {
+  JobRecordService,
+  STUCK_ATTEMPT_AFTER_MS,
+} from "../src/application/job-record-service";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
+import {
+  DELIVERY_ATTEMPTS_ROLLBACK_FLAG,
+  StaticFeatureFlagStore,
+} from "../src/application/feature-flags";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
@@ -58,6 +66,46 @@ describe("JobRecordService", () => {
       "running",
     ]);
     expect(attempts.some((attempt) => attempt.errorBody === "endpoint timeout after 30s")).toBe(true);
+  });
+
+  test("derives display status from the latest attempt and marks stale running attempts stuck", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    expect(await service.displayStatus(job)).toBe("running");
+
+    const running = (await repo.listAttempts(job.id))[0];
+    expect(running).toBeDefined();
+    await repo.insertAttempt({
+      deliveryJobId: job.id,
+      attemptNumber: (running?.attemptNumber ?? 0) + 1,
+      status: "running",
+      workerId: "worker-us-east-04",
+      startedAt: new Date(Date.now() - STUCK_ATTEMPT_AFTER_MS - 1),
+    });
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+    expect(await service.canStartNewDelivery(job)).toBe(true);
+  });
+
+  test("falls back to jobs.status when the rollback feature flag is on", async () => {
+    const repo = new InMemoryJobRepository();
+    const rpc = new DeliveryAttemptRpc(
+      repo,
+      new StaticFeatureFlagStore(new Set([DELIVERY_ATTEMPTS_ROLLBACK_FLAG])),
+    );
+    const service = new JobRecordService(repo, rpc);
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    const updated = await repo.findById(job.id);
+    expect(updated).not.toBeNull();
+    expect(await repo.listAttempts(job.id)).toEqual([]);
+    expect(await service.displayStatus(updated!)).toBe("running");
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
