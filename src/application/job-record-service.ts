@@ -6,18 +6,27 @@ import type {
   JobMetadata,
   JobRecord,
 } from "../domain/job";
+import type { AccountRetryBudget } from "./account-retry-budget";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { DeliveryAttemptRollbackFlags } from "./delivery-attempt-rollback-flags";
 
 const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
 
-export type DisplayStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stuck";
+export type DisplayStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "stuck"
+  | "dlq";
 
 export class JobRecordService {
   constructor(
     private readonly jobs: JobRepository,
     private readonly attemptRpc: DeliveryAttemptRpc,
     private readonly rollbackFlags: DeliveryAttemptRollbackFlags,
+    private readonly retryBudgets: AccountRetryBudget,
   ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
@@ -67,19 +76,52 @@ export class JobRecordService {
     });
   }
 
-  async displayStatus(job: JobRecord): Promise<DisplayStatus> {
+  private async currentJob(job: JobRecord): Promise<JobRecord> {
     const current = await this.jobs.findById(job.id);
     if (!current) {
       throw new JobNotFoundError(job.id);
     }
+    return current;
+  }
+
+  async isInDlq(job: JobRecord): Promise<boolean> {
+    const current = await this.currentJob(job);
+    const budget = this.retryBudgets.getRetryBudget(current.accountId);
 
     if (this.rollbackFlags.isRollbackEnabled(current.accountId)) {
+      return current.status !== "completed" && current.retryCount >= budget;
+    }
+
+    const latest = await this.attemptRpc.getLatestAttempt(current.id);
+    if (latest?.status === "completed") {
+      return false;
+    }
+
+    const failedCount = await this.attemptRpc.countFailedExecutions(current.id);
+    return failedCount >= budget;
+  }
+
+  async displayStatus(job: JobRecord): Promise<DisplayStatus> {
+    const current = await this.currentJob(job);
+
+    if (this.rollbackFlags.isRollbackEnabled(current.accountId)) {
+      if (await this.isInDlq(current)) {
+        return "dlq";
+      }
       return (current.status ?? "queued") as DisplayStatus;
     }
 
     const latest = await this.attemptRpc.getLatestAttempt(current.id);
     if (!latest) {
       return "queued";
+    }
+
+    if (latest.status === "completed") {
+      return "completed";
+    }
+
+    if ((await this.isInDlq(current)) && latest.status === "failed") {
+      return "dlq";
     }
 
     if (latest.status === "running") {

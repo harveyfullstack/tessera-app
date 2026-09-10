@@ -1,8 +1,32 @@
 import type { DeliveryAttemptRecord } from "../domain/delivery-attempt";
 import type { JobRecord, JobStatus } from "../domain/job";
 
+export const DLQ_BOOKKEEPING_MARKER = "Moved to dead letter queue";
+
+export function isDlqBookkeepingAttempt(attempt: DeliveryAttemptRecord): boolean {
+  return (
+    attempt.errorBody?.includes(DLQ_BOOKKEEPING_MARKER) === true ||
+    attempt.errorBody?.startsWith("DLQ:") === true
+  );
+}
+
+export function isFailedDeliveryExecution(attempt: DeliveryAttemptRecord): boolean {
+  return attempt.status === "failed" && !isDlqBookkeepingAttempt(attempt);
+}
+
 export function isDiagnosticDeliveryAttempt(attempt: DeliveryAttemptRecord): boolean {
-  return attempt.status === "failed" || attempt.status === "completed";
+  return (
+    (attempt.status === "failed" || attempt.status === "completed") &&
+    !isDlqBookkeepingAttempt(attempt)
+  );
+}
+
+export function countFailedDeliveryExecutions(attempts: DeliveryAttemptRecord[]): number {
+  return attempts.filter(isFailedDeliveryExecution).length;
+}
+
+export function isJobAlreadyDrained(job: JobRecord): boolean {
+  return job.errorMessage?.includes(DLQ_BOOKKEEPING_MARKER) === true;
 }
 
 export function countTerminalDeliveryAttempts(attempts: DeliveryAttemptRecord[]): number {
