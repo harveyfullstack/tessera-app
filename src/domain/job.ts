@@ -58,3 +58,36 @@ export interface UpdateJobExecutionInput {
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
 }
+
+export interface DeliveryJob {
+  id: string;
+  accountId: string;
+  briefId: string;
+  taskId?: string | undefined;
+  parentJobId?: string | undefined;
+  type: JobType;
+  metadata: JobMetadata;
+  createdAt: Date;
+}
+
+export interface DeliveryAttempt {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  createdAt: Date;
+}
+
+export interface CreateDeliveryAttemptInput {
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+}
