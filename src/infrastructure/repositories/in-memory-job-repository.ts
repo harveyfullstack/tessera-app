@@ -22,6 +22,16 @@ export class InMemoryJobRepository implements JobRepository {
   }
 
   async create(input: CreateJobInput): Promise<JobRecord> {
+    const duplicate = [...this.jobs.values()].find(
+      (job) =>
+        job.accountId === input.accountId &&
+        job.briefId === input.briefId &&
+        job.type === input.type,
+    );
+    if (duplicate) {
+      return duplicate;
+    }
+
     const now = new Date();
     const job: JobRecord = {
       id: randomUUID(),

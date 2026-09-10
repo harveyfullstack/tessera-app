@@ -32,7 +32,8 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Delivery intent lives on delivery_jobs. status/retryCount remain as a
+  // compatibility projection until execution writes move to delivery_attempts.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
