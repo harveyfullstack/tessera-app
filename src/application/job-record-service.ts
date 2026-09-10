@@ -1,4 +1,4 @@
-import { DuplicateIntentError } from "../domain/errors";
+import { DuplicateIntentError, JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
@@ -7,20 +7,67 @@ import type {
   JobMetadata,
   JobRecord,
 } from "../domain/job";
+import { AccountRetryBudgetRegistry } from "./account-retry-budget";
 import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
 export const STUCK_ATTEMPT_AFTER_MS = 5 * 60 * 1000;
 
 export type JobRecordView = JobRecord & { displayStatus: string };
 
+export interface DlqEndpointSummary {
+  endpointUrl: string;
+  lastThreeAttemptBodies: string[];
+}
+
+export interface DlqSummary {
+  pastBudgetCount: number;
+  endpoints: DlqEndpointSummary[];
+}
+
+export interface JobsListResponse {
+  jobs: JobRecordView[];
+  dlq: DlqSummary;
+}
+
 export class JobRecordService {
   private readonly rpc: DeliveryAttemptRpc;
+  private readonly budgets: AccountRetryBudgetRegistry;
 
   constructor(
     private readonly jobs: JobRepository,
     rpc?: DeliveryAttemptRpc,
+    budgets?: AccountRetryBudgetRegistry,
   ) {
     this.rpc = rpc ?? new DeliveryAttemptRpc(jobs);
+    this.budgets = budgets ?? new AccountRetryBudgetRegistry();
+  }
+
+  async findById(jobId: string): Promise<JobRecord | null> {
+    return this.jobs.findById(jobId);
+  }
+
+  async listIntentByBrief(briefId: string): Promise<JobRecord[]> {
+    return this.jobs.listByBrief(briefId);
+  }
+
+  async markDeadLettered(jobId: string): Promise<JobRecord> {
+    const existing = await this.jobs.findById(jobId);
+    if (!existing) {
+      throw new JobNotFoundError(jobId);
+    }
+    return this.jobs.markDeadLettered(jobId);
+  }
+
+  retryBudgetFor(accountId: string): number {
+    return this.budgets.get(accountId);
+  }
+
+  async isPastRetryBudget(job: JobRecord): Promise<boolean> {
+    if (job.type !== "dispatch_webhook") {
+      return false;
+    }
+    const attempts = await this.jobs.listAttempts(job.id);
+    return attempts.length >= this.budgets.get(job.accountId);
   }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
@@ -64,14 +111,55 @@ export class JobRecordService {
     return this.rpc.retry(jobId);
   }
 
-  async listByBrief(briefId: string): Promise<JobRecordView[]> {
+  async listByBrief(briefId: string, status?: string): Promise<JobRecordView[]> {
     const rows = await this.jobs.listByBrief(briefId);
-    return Promise.all(
+    const views = await Promise.all(
       rows.map(async (job) => ({
         ...job,
         displayStatus: await this.displayStatus(job),
       })),
     );
+
+    if (!status) {
+      return views;
+    }
+
+    if (status === "dlq") {
+      const matches = await Promise.all(
+        views.map(async (job) => ({
+          job,
+          include: job.displayStatus === "dlq" || (await this.isPastRetryBudget(job)),
+        })),
+      );
+      return matches.filter((row) => row.include).map((row) => row.job);
+    }
+
+    return views.filter((job) => job.displayStatus === status);
+  }
+
+  async dlqSummary(briefId: string): Promise<DlqSummary> {
+    const rows = (await this.jobs.listByBrief(briefId)).filter((job) => job.type === "dispatch_webhook");
+    const endpoints: DlqEndpointSummary[] = [];
+    let pastBudgetCount = 0;
+
+    for (const job of rows) {
+      if (!(await this.isPastRetryBudget(job))) {
+        continue;
+      }
+      pastBudgetCount += 1;
+      const attempts = await this.jobs.listAttempts(job.id);
+      endpoints.push({
+        endpointUrl: job.metadata.endpointUrl,
+        lastThreeAttemptBodies: attempts.slice(0, 3).map((attempt) => attempt.errorBody ?? ""),
+      });
+    }
+
+    return { pastBudgetCount, endpoints };
+  }
+
+  async listJobsResponse(briefId: string, status?: string): Promise<JobsListResponse> {
+    const [jobs, dlq] = await Promise.all([this.listByBrief(briefId, status), this.dlqSummary(briefId)]);
+    return { jobs, dlq };
   }
 
   async ensureWebhookDispatchJob(
@@ -90,6 +178,10 @@ export class JobRecordService {
   async displayStatus(job: JobRecord, now: Date = new Date()): Promise<string> {
     if (this.rpc.isRollbackEnabled()) {
       return job.status ?? "queued";
+    }
+
+    if (job.deadLetteredAt) {
+      return "dlq";
     }
 
     const attempts = await this.jobs.listAttempts(job.id);

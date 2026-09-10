@@ -201,4 +201,14 @@ class RacyJobRepository implements JobRepository {
   async listAttempts(_deliveryJobId: string): Promise<DeliveryAttempt[]> {
     return [];
   }
+
+  async markDeadLettered(jobId: string): Promise<JobRecord> {
+    const existing = await this.findById(jobId);
+    if (!existing) {
+      throw new Error("not found");
+    }
+    const updated: JobRecord = { ...existing, deadLetteredAt: new Date(), updatedAt: new Date() };
+    this.jobs.set(jobId, updated);
+    return updated;
+  }
 }

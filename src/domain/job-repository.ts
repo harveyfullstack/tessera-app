@@ -16,4 +16,5 @@ export interface JobRepository {
   listByBrief(briefId: string): Promise<JobRecord[]>;
   insertAttempt(input: CreateDeliveryAttemptInput): Promise<DeliveryAttempt>;
   listAttempts(deliveryJobId: string): Promise<DeliveryAttempt[]>;
+  markDeadLettered(jobId: string): Promise<JobRecord>;
 }

@@ -13,6 +13,7 @@ export interface JobMetadata {
   endpointUrl: string;
   eventType: string;
   payloadHash: string;
+  movedEndpointUrls?: string[] | undefined;
 }
 
 export interface JobExecutionDetails {
@@ -42,6 +43,7 @@ export interface JobRecord {
   completedAt?: Date | undefined;
   updatedAt: Date;
   createdAt: Date;
+  deadLetteredAt?: Date | undefined;
 }
 
 export interface DeliveryAttempt {

@@ -136,4 +136,20 @@ export class InMemoryJobRepository implements JobRepository {
       .filter((attempt) => attempt.deliveryJobId === deliveryJobId)
       .sort((a, b) => b.attemptNumber - a.attemptNumber);
   }
+
+  async markDeadLettered(jobId: string): Promise<JobRecord> {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new JobNotFoundError(jobId);
+    }
+
+    const updated: JobRecord = {
+      ...job,
+      deadLetteredAt: job.deadLetteredAt ?? new Date(),
+      updatedAt: new Date(),
+    };
+
+    this.jobs.set(jobId, updated);
+    return updated;
+  }
 }
