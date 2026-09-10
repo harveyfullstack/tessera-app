@@ -32,7 +32,8 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Legacy/rollback columns on delivery_jobs. Execution truth lives on
+  // delivery_attempts after the phase-2 split.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
@@ -41,6 +42,30 @@ export interface JobRecord {
   completedAt?: Date | undefined;
   updatedAt: Date;
   createdAt: Date;
+}
+
+export interface DeliveryAttempt {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt?: Date | undefined;
+  createdAt: Date;
+}
+
+export interface CreateDeliveryAttemptInput {
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt?: Date | undefined;
 }
 
 export interface CreateJobInput {

@@ -1,8 +1,10 @@
 import { randomUUID } from "crypto";
-import { JobNotFoundError } from "../../domain/errors";
+import { DuplicateIntentError, JobNotFoundError } from "../../domain/errors";
 import type { JobRepository } from "../../domain/job-repository";
 import type {
+  CreateDeliveryAttemptInput,
   CreateJobInput,
+  DeliveryAttempt,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -10,6 +12,7 @@ import type {
 
 export class InMemoryJobRepository implements JobRepository {
   private readonly jobs = new Map<string, JobRecord>();
+  private readonly attempts = new Map<string, DeliveryAttempt>();
 
   async findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]> {
     return [...this.jobs.values()]
@@ -22,6 +25,16 @@ export class InMemoryJobRepository implements JobRepository {
   }
 
   async create(input: CreateJobInput): Promise<JobRecord> {
+    const duplicate = [...this.jobs.values()].find(
+      (job) =>
+        job.accountId === input.accountId &&
+        job.briefId === input.briefId &&
+        job.type === input.type,
+    );
+    if (duplicate) {
+      throw new DuplicateIntentError(input.accountId, input.briefId, input.type);
+    }
+
     const now = new Date();
     const job: JobRecord = {
       id: randomUUID(),
@@ -85,5 +98,44 @@ export class InMemoryJobRepository implements JobRepository {
     return [...this.jobs.values()]
       .filter((job) => job.briefId === briefId)
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
+  async insertAttempt(input: CreateDeliveryAttemptInput): Promise<DeliveryAttempt> {
+    if (!this.jobs.has(input.deliveryJobId)) {
+      throw new JobNotFoundError(input.deliveryJobId);
+    }
+
+    const duplicate = [...this.attempts.values()].find(
+      (attempt) =>
+        attempt.deliveryJobId === input.deliveryJobId &&
+        attempt.attemptNumber === input.attemptNumber,
+    );
+    if (duplicate) {
+      throw new Error(
+        `delivery_attempts unique (delivery_job_id, attempt_number) violated for ${input.deliveryJobId}/${input.attemptNumber}`,
+      );
+    }
+
+    const attempt: DeliveryAttempt = {
+      id: randomUUID(),
+      deliveryJobId: input.deliveryJobId,
+      attemptNumber: input.attemptNumber,
+      workerId: input.workerId,
+      status: input.status,
+      responseStatus: input.responseStatus,
+      responseLatencyMs: input.responseLatencyMs,
+      errorBody: input.errorBody,
+      startedAt: input.startedAt,
+      createdAt: new Date(),
+    };
+
+    this.attempts.set(attempt.id, attempt);
+    return attempt;
+  }
+
+  async listAttempts(deliveryJobId: string): Promise<DeliveryAttempt[]> {
+    return [...this.attempts.values()]
+      .filter((attempt) => attempt.deliveryJobId === deliveryJobId)
+      .sort((a, b) => b.attemptNumber - a.attemptNumber);
   }
 }

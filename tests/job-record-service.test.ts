@@ -3,7 +3,9 @@ import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
+  CreateDeliveryAttemptInput,
   CreateJobInput,
+  DeliveryAttempt,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -135,5 +137,13 @@ class RacyJobRepository implements JobRepository {
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return [...this.jobs.values()].filter((job) => job.briefId === briefId);
+  }
+
+  async insertAttempt(_input: CreateDeliveryAttemptInput): Promise<DeliveryAttempt> {
+    throw new Error("not implemented");
+  }
+
+  async listAttempts(_deliveryJobId: string): Promise<DeliveryAttempt[]> {
+    return [];
   }
 }

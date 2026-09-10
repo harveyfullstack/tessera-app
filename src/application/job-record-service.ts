@@ -1,4 +1,4 @@
-import { JobNotFoundError } from "../domain/errors";
+import { DuplicateIntentError, JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
@@ -18,8 +18,18 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
-    return this.jobs.create(input);
+    try {
+      return await this.jobs.create(input);
+    } catch (error) {
+      if (error instanceof DuplicateIntentError) {
+        const raced = await this.jobs.findByBriefAndType(input.briefId, input.type);
+        const winner = raced[0];
+        if (winner) {
+          return winner;
+        }
+      }
+      throw error;
+    }
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
