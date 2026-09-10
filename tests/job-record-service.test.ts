@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { InMemoryAccountRetryBudget } from "../src/application/account-retry-budget";
 import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { InMemoryDeliveryAttemptRollbackFlags } from "../src/application/delivery-attempt-rollback-flags";
 import { JobRecordService } from "../src/application/job-record-service";
@@ -29,8 +30,9 @@ function createService(rollback = false) {
   const jobs = new InMemoryJobRepository();
   const attempts = new InMemoryDeliveryAttemptRepository();
   const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
+  const retryBudgets = new InMemoryAccountRetryBudget();
   const attemptRpc = new DeliveryAttemptRpc(jobs, attempts, rollbackFlags);
-  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags);
+  const service = new JobRecordService(jobs, attemptRpc, rollbackFlags, retryBudgets);
 
   if (rollback) {
     rollbackFlags.enable("acct-1");
@@ -72,11 +74,13 @@ describe("JobRecordService", () => {
   test("can produce duplicate intent rows under race conditions", async () => {
     const attempts = new InMemoryDeliveryAttemptRepository();
     const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
+    const retryBudgets = new InMemoryAccountRetryBudget();
     const repo = new RacyJobRepository();
     const service = new JobRecordService(
       repo,
       new DeliveryAttemptRpc(repo, attempts, rollbackFlags),
       rollbackFlags,
+      retryBudgets,
     );
 
     const [a, b] = await Promise.all([

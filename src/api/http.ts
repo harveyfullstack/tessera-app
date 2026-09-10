@@ -1,16 +1,8 @@
-import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
-import { InMemoryDeliveryAttemptRollbackFlags } from "../application/delivery-attempt-rollback-flags";
-import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
-import { JobRecordService } from "../application/job-record-service";
-import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
-import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
+import { createDeliveryAppContext } from "../application/delivery-app-context";
+import type { JobRecord } from "../domain/job";
+import type { DisplayStatus } from "../application/job-record-service";
 
-const jobRepository = new InMemoryJobRepository();
-const attemptRepository = new InMemoryDeliveryAttemptRepository();
-const rollbackFlags = new InMemoryDeliveryAttemptRollbackFlags();
-const attemptRpc = new DeliveryAttemptRpc(jobRepository, attemptRepository, rollbackFlags);
-const jobRecords = new JobRecordService(jobRepository, attemptRpc, rollbackFlags);
-const delivery = new DeliveryOrchestrator(jobRecords);
+const { jobRecords, delivery, drainDlq } = createDeliveryAppContext();
 
 interface DeliverBody {
   briefId: string;
@@ -25,6 +17,10 @@ interface DeliverBody {
 
 const accountId = "tessera-demo-account";
 
+interface JobListItem extends JobRecord {
+  displayStatus: DisplayStatus;
+}
+
 export const server = Bun.serve({
   port: Number(process.env.PORT ?? "8787"),
   async fetch(req) {
@@ -33,8 +29,20 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
+        const statusFilter = url.searchParams.get("status");
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const enriched: JobListItem[] = [];
+
+        for (const job of rows) {
+          const displayStatus = await jobRecords.displayStatus(job);
+          if (statusFilter === "dlq" && displayStatus !== "dlq") {
+            continue;
+          }
+          enriched.push({ ...job, displayStatus });
+        }
+
+        const dlq = await drainDlq.buildDlqSummaries(briefId, accountId);
+        return Response.json({ jobs: enriched, dlq });
       }
     }
 
@@ -52,6 +60,15 @@ export const server = Bun.serve({
         simulateFailure: body.simulateFailure ?? false,
       });
 
+      return Response.json({ job: result });
+    }
+
+    if (req.method === "POST" && url.pathname === "/dlq/drain") {
+      const body = (await req.json()) as { briefId: string };
+      const result = await drainDlq.drain({
+        accountId,
+        briefId: body.briefId,
+      });
       return Response.json({ job: result });
     }
 
