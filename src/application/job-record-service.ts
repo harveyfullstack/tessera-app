@@ -1,3 +1,5 @@
+import type { DeliveryAttempt } from "../domain/delivery";
+import type { DeliveryAttemptRepository } from "../domain/delivery-repository";
 import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
@@ -5,11 +7,38 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import type { DeliverySplitFlags } from "./delivery-split-flags";
+
+export const STUCK_RUNNING_AFTER_MS = 5 * 60 * 1000;
+
+export function deriveDisplayStatus(
+  latestAttempt: DeliveryAttempt | null,
+  now = new Date(),
+): string {
+  if (!latestAttempt) {
+    return "queued";
+  }
+
+  if (
+    latestAttempt.status === "running" &&
+    latestAttempt.startedAt !== undefined &&
+    now.getTime() - latestAttempt.startedAt.getTime() > STUCK_RUNNING_AFTER_MS
+  ) {
+    return "stuck";
+  }
+
+  return latestAttempt.status;
+}
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly rpc: DeliveryAttemptRpc,
+    private readonly flags: DeliverySplitFlags,
+    private readonly deliveryAttempts: DeliveryAttemptRepository,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -18,21 +47,13 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // Intent creation stays on jobs for the rollback bar. Execution writes
+    // go through DeliveryAttemptRpc, which is the only flag boundary.
     return this.jobs.create(input);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.rpc.markRunning(await this.requireJob(jobId), workerId);
   }
 
   async markFailed(
@@ -40,37 +61,15 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.rpc.markFailed(await this.requireJob(jobId), errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.rpc.markCompleted(await this.requireJob(jobId), details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.rpc.retry(await this.requireJob(jobId));
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
@@ -90,13 +89,25 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord, now = new Date()): Promise<string> {
+    if (this.flags.isRollbackEnabled(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    const latest = await this.deliveryAttempts.findLatestByDeliveryJobId(job.id);
+    return deriveDisplayStatus(latest, now);
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord, now = new Date()): Promise<boolean> {
+    const status = await this.displayStatus(job, now);
     return status !== "running";
+  }
+
+  private async requireJob(jobId: string): Promise<JobRecord> {
+    const existing = await this.jobs.findById(jobId);
+    if (!existing) {
+      throw new JobNotFoundError(jobId);
+    }
+    return existing;
   }
 }

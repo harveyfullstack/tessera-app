@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { JobRecordService } from "../src/application/job-record-service";
-import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
+import { createDeliveryRuntime } from "../src/application/delivery-runtime";
+import { InMemoryDeliverySplitFlags } from "../src/application/delivery-split-flags";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
   CreateJobInput,
@@ -24,44 +24,93 @@ const baseInput: CreateJobInput = {
 
 describe("JobRecordService", () => {
   test("reuses canonical job when one already exists", async () => {
-    const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const { jobRecords } = createDeliveryRuntime();
 
-    const first = await service.ensureJobRecord(baseInput);
-    const second = await service.ensureJobRecord(baseInput);
+    const first = await jobRecords.ensureJobRecord(baseInput);
+    const second = await jobRecords.ensureJobRecord(baseInput);
 
     expect(second.id).toBe(first.id);
   });
 
-  test("mutates the same row across retries and overwrites terminal execution details", async () => {
-    const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+  test("appends delivery_attempts through the RPC and preserves prior error bodies", async () => {
+    const { jobRecords, deliveryAttempts } = createDeliveryRuntime();
+    const job = await jobRecords.ensureJobRecord(baseInput);
 
-    const job = await service.ensureJobRecord(baseInput);
+    await jobRecords.markRunning(job.id, "worker-us-east-04");
+    await jobRecords.markFailed(job.id, "endpoint timeout after 30s", {
+      errorBody: "endpoint timeout after 30s",
+    });
+    await jobRecords.retry(job.id);
+    const final = await jobRecords.markRunning(job.id, "worker-us-east-07");
 
-    await service.markRunning(job.id, "worker-us-east-04");
-    await service.markFailed(job.id, "endpoint timeout after 30s");
-    await service.retry(job.id);
-    const final = await service.markRunning(job.id, "worker-us-east-07");
-
+    const history = await deliveryAttempts.listByDeliveryJobId(job.id);
+    expect(history.map((row) => row.status)).toEqual(["running", "failed", "queued", "running"]);
+    expect(history[1]?.errorBody).toBe("endpoint timeout after 30s");
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
-    expect(final.errorMessage).toBeUndefined();
+    expect(final.status).toBe("running");
   });
 
-  test("can produce duplicate intent rows under race conditions", async () => {
+  test("can produce duplicate intent rows under race conditions on the jobs table", async () => {
     const repo = new RacyJobRepository();
-    const service = new JobRecordService(repo);
+    const { jobRecords } = createDeliveryRuntime({ jobs: repo });
 
     const [a, b] = await Promise.all([
-      service.ensureJobRecord(baseInput),
-      service.ensureJobRecord(baseInput),
+      jobRecords.ensureJobRecord(baseInput),
+      jobRecords.ensureJobRecord(baseInput),
     ]);
 
     expect(a.id).not.toBe(b.id);
     expect(repo.created.length).toBe(2);
+  });
+
+  test("derives display status from MAX(attempt_number) and marks stale running attempts stuck", async () => {
+    const { jobRecords, deliveryAttempts } = createDeliveryRuntime();
+    const job = await jobRecords.ensureJobRecord(baseInput);
+
+    expect(await jobRecords.displayStatus(job)).toBe("queued");
+
+    await jobRecords.markRunning(job.id, "worker-us-east-04");
+    const latest = await deliveryAttempts.findLatestByDeliveryJobId(job.id);
+    expect(latest?.attemptNumber).toBe(1);
+    expect(await jobRecords.displayStatus(job)).toBe("running");
+
+    const sixMinutesLater = new Date((latest?.startedAt ?? new Date()).getTime() + 6 * 60 * 1000);
+    expect(await jobRecords.displayStatus(job, sixMinutesLater)).toBe("stuck");
+    expect(await jobRecords.canStartNewDelivery(job, sixMinutesLater)).toBe(true);
+
+    await jobRecords.markFailed(job.id, "endpoint timeout after 30s");
+    expect(await jobRecords.displayStatus(job, sixMinutesLater)).toBe("failed");
+  });
+
+  test("falls back to jobs.status for displayStatus when rollback is enabled", async () => {
+    const flags = new InMemoryDeliverySplitFlags();
+    const { jobRecords, deliveryAttempts } = createDeliveryRuntime({ flags });
+    const job = await jobRecords.ensureJobRecord(baseInput);
+
+    await jobRecords.markRunning(job.id, "worker-us-east-04");
+    expect(await deliveryAttempts.listByDeliveryJobId(job.id)).toHaveLength(1);
+    expect(await jobRecords.displayStatus(job)).toBe("running");
+
+    flags.enableRollback(baseInput.accountId);
+    expect(await jobRecords.displayStatus(job)).toBe("queued");
+  });
+
+  test("falls back to mutating jobs when the rollback feature flag is on", async () => {
+    const flags = new InMemoryDeliverySplitFlags();
+    flags.enableRollback(baseInput.accountId);
+    const { jobRecords, deliveryAttempts } = createDeliveryRuntime({ flags });
+    const job = await jobRecords.ensureJobRecord(baseInput);
+
+    await jobRecords.markRunning(job.id, "worker-us-east-04");
+    await jobRecords.markFailed(job.id, "endpoint timeout after 30s");
+    await jobRecords.retry(job.id);
+    const final = await jobRecords.markRunning(job.id, "worker-us-east-07");
+
+    expect(await deliveryAttempts.listAll()).toHaveLength(0);
+    expect(final.retryCount).toBe(1);
+    expect(final.workerId).toBe("worker-us-east-07");
+    expect(final.errorMessage).toBeUndefined();
   });
 });
 
@@ -70,7 +119,6 @@ class RacyJobRepository implements JobRepository {
   created: JobRecord[] = [];
 
   async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
-    // Stale read window where concurrent callers both observe no row.
     return [];
   }
 
