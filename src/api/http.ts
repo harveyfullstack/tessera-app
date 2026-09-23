@@ -1,6 +1,8 @@
+import { DeadLetterQueueInspector } from "../application/dead-letter-queue-inspector";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
 import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
+import { RetryBudgetPolicy } from "../application/retry-budget-policy";
 import { StaticDeliveryRollbackFlag } from "../infrastructure/flags/static-delivery-rollback-flag";
 import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
@@ -14,6 +16,9 @@ const deliveryAttempts = new DeliveryAttemptRpc(
 );
 const jobRecords = new JobRecordService(jobRepository, deliveryAttempts);
 const delivery = new DeliveryOrchestrator(jobRecords);
+const dlqInspector = new DeadLetterQueueInspector(attemptRepository, new RetryBudgetPolicy());
+
+const DLQ_STATUS_FILTER = "dlq";
 
 interface DeliverBody {
   briefId: string;
@@ -34,10 +39,16 @@ export const server = Bun.serve({
     const url = new URL(req.url);
 
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
-      const [, briefs, briefId, jobs] = url.pathname.split("/");
-      if (briefs === "briefs" && briefId && jobs === "jobs") {
+      const [, briefs, briefId, jobsSegment] = url.pathname.split("/");
+      if (briefs === "briefs" && briefId && jobsSegment === "jobs") {
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const dlq = await dlqInspector.summarize(rows);
+        const dlqJobIds = new Set(dlq.endpoints.map((endpoint) => endpoint.jobId));
+        const jobs =
+          url.searchParams.get("status") === DLQ_STATUS_FILTER
+            ? rows.filter((row) => dlqJobIds.has(row.id))
+            : rows;
+        return Response.json({ jobs, dlq });
       }
     }
 
