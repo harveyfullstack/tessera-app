@@ -1,80 +1,51 @@
-import { JobNotFoundError } from "../domain/errors";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  readonly rpc: DeliveryAttemptRpc;
+
+  constructor(private readonly jobs: JobRepository, rpc?: DeliveryAttemptRpc) {
+    this.rpc = rpc ?? new DeliveryAttemptRpc(jobs);
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
-    const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
-    const canonical = existing[0];
-    if (canonical) {
-      return canonical;
-    }
-
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
-    return this.jobs.create(input);
+    return this.rpc.project(await this.jobs.ensureIntent(input));
   }
 
-  async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+  markRunning(jobId: string, workerId: string): Promise<JobRecord> {
+    return this.rpc.append(jobId, { operation: "execution", execution: {
+      status: "running", workerId, details: { workerId },
+    } });
   }
 
-  async markFailed(
-    jobId: string,
-    errorMessage: string,
-    details?: JobExecutionDetails,
-  ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+  markFailed(jobId: string, errorMessage: string, details?: JobExecutionDetails): Promise<JobRecord> {
+    return this.rpc.append(jobId, { operation: "execution", execution: { status: "failed", errorMessage, details } });
   }
 
-  async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+  markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
+    return this.rpc.append(jobId, { operation: "execution", execution: { status: "completed", details } });
   }
 
-  async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+  retry(jobId: string): Promise<JobRecord> {
+    return this.rpc.append(jobId, { operation: "retry" });
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  markDeadLettered(jobId: string, expectedSequence: number): Promise<JobRecord> {
+    return this.rpc.append(jobId, { operation: "execution", execution: { status: "dlq" }, expectedSequence });
+  }
+
+  listAttempts(jobId: string) {
+    return this.jobs.listAttempts(jobId);
+  }
+
+  async listByBrief(briefId: string, accountId?: string): Promise<JobRecord[]> {
+    return (await this.jobs.listByBrief(briefId, accountId)).map((job) => this.rpc.project(job));
   }
 
   async ensureWebhookDispatchJob(
@@ -90,13 +61,18 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  static displayStatus(job: JobRecord, now: Date = new Date()): string {
+    if (job.executionSource !== "attempts") return job.status;
+    const latest = job.latestAttempt;
+    if (!latest) return "queued";
+    const staleAfterMs = 5 * 60 * 1000;
+    if (latest.status === "running" && latest.startedAt &&
+      now.getTime() - latest.startedAt.getTime() > staleAfterMs) return "stuck";
+    return latest.status;
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+    const status = JobRecordService.displayStatus(job);
+    return !["running", "stuck", "dlq"].includes(status);
   }
 }

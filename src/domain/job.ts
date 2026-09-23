@@ -1,3 +1,5 @@
+import type { DeliveryAttempt } from "./delivery-attempt";
+
 export type JobType = "dispatch_webhook" | "drain_dlq";
 
 export type JobStatus =
@@ -5,7 +7,8 @@ export type JobStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "dlq";
 
 export interface JobMetadata {
   customerId: string;
@@ -32,7 +35,9 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Compatibility read projection; execution is stored separately from intent.
+  latestAttempt?: DeliveryAttempt | undefined;
+  executionSource?: "legacy" | "attempts" | undefined;
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;

@@ -1,139 +1,78 @@
 import { describe, expect, test } from "bun:test";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
-import type { JobRepository } from "../src/domain/job-repository";
-import type {
-  CreateJobInput,
-  JobRecord,
-  JobType,
-  UpdateJobExecutionInput,
-} from "../src/domain/job";
+import type { CreateJobInput } from "../src/domain/job";
 
 const baseInput: CreateJobInput = {
-  accountId: "acct-1",
-  briefId: "50ce0002-0000-4000-a001-000000000001",
-  type: "dispatch_webhook",
-  metadata: {
-    customerId: "cus_dana_fintech",
-    subscriptionId: "sub_evt_pageview_anomaly",
-    endpointUrl: "https://hooks.dana-fintech.com/tessera",
-    eventType: "anomaly.detected",
-    payloadHash: "sha256:7f3b1e",
-  },
+  accountId: "acct-1", briefId: "brief-1", type: "dispatch_webhook",
+  metadata: { customerId: "customer", subscriptionId: "subscription",
+    endpointUrl: "https://example.com/hooks", eventType: "anomaly.detected", payloadHash: "hash" },
 };
 
 describe("JobRecordService", () => {
-  test("reuses canonical job when one already exists", async () => {
+  test("concurrent callers reuse one account-scoped immutable intent", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo);
-
-    const first = await service.ensureJobRecord(baseInput);
-    const second = await service.ensureJobRecord(baseInput);
-
-    expect(second.id).toBe(first.id);
+    const rows = await Promise.all(Array.from({ length: 50 }, () => service.ensureJobRecord(baseInput)));
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1);
+    const other = await service.ensureJobRecord({ ...baseInput, accountId: "acct-2" });
+    expect(other.id).not.toBe(rows[0]!.id);
+    const first = rows[0]!;
+    const replay = await service.ensureJobRecord({ ...baseInput, metadata: { ...baseInput.metadata, endpointUrl: "https://changed.test" } });
+    expect(replay.metadata).toEqual(baseInput.metadata);
+    first.metadata.endpointUrl = "https://mutated.test";
+    expect((await repo.getIntent(first.id))!.metadata).toEqual(baseInput.metadata);
   });
 
-  test("mutates the same row across retries and overwrites terminal execution details", async () => {
+  test("each write retains full details without mutating intent or earlier history", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo);
-
     const job = await service.ensureJobRecord(baseInput);
-
-    await service.markRunning(job.id, "worker-us-east-04");
-    await service.markFailed(job.id, "endpoint timeout after 30s");
+    const intent = await repo.getIntent(job.id);
+    await service.markRunning(job.id, "worker-1");
+    await service.markFailed(job.id, "timeout", { responseStatus: 503, errorBody: "unavailable", responseLatencyMs: 30000 });
     await service.retry(job.id);
-    const final = await service.markRunning(job.id, "worker-us-east-07");
-
-    expect(final.retryCount).toBe(1);
-    expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
-    expect(final.errorMessage).toBeUndefined();
+    await service.markRunning(job.id, "worker-2");
+    await service.markCompleted(job.id, { responseStatus: 200, responseLatencyMs: 20 });
+    const history = await service.listAttempts(job.id);
+    expect(history.map((attempt) => attempt.attemptNumber)).toEqual([1, 2, 3, 4, 5]);
+    expect(history[1]!.details.errorBody).toBe("unavailable");
+    expect(history[1]!.errorMessage).toBe("timeout");
+    expect(history[4]!.retryCount).toBe(1);
+    expect(await repo.getIntent(job.id)).toEqual(intent);
+    history[1]!.details.errorBody = "changed";
+    expect((await service.listAttempts(job.id))[1]!.details.errorBody).toBe("unavailable");
   });
 
-  test("can produce duplicate intent rows under race conditions", async () => {
-    const repo = new RacyJobRepository();
-    const service = new JobRecordService(repo);
+  test("concurrent writes allocate unique sequences and retries atomically", async () => {
+    const service = new JobRecordService(new InMemoryJobRepository());
+    const job = await service.ensureJobRecord(baseInput);
+    const rows = await Promise.all(Array.from({ length: 50 }, () => service.retry(job.id)));
+    expect(rows.map((row) => row.latestAttempt!.attemptNumber)).toEqual(Array.from({ length: 50 }, (_, i) => i + 1));
+    expect(rows.at(-1)!.retryCount).toBe(50);
+  });
 
-    const [a, b] = await Promise.all([
-      service.ensureJobRecord(baseInput),
-      service.ensureJobRecord(baseInput),
-    ]);
+  test("only one concurrent worker can start delivery", async () => {
+    const service = new JobRecordService(new InMemoryJobRepository());
+    const job = await service.ensureJobRecord(baseInput);
+    const results = await Promise.allSettled([service.markRunning(job.id, "one"), service.markRunning(job.id, "two")]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(await service.listAttempts(job.id)).toHaveLength(1);
+  });
 
-    expect(a.id).not.toBe(b.id);
-    expect(repo.created.length).toBe(2);
+  test("missing execution writes fail without creating history", async () => {
+    const service = new JobRecordService(new InMemoryJobRepository());
+    await expect(service.retry("missing")).rejects.toThrow("Job not found");
+    await expect(service.markCompleted("missing", {})).rejects.toThrow("Job not found");
+  });
+
+  test("a stale DLQ decision cannot overwrite a newer execution", async () => {
+    const service = new JobRecordService(new InMemoryJobRepository());
+    const job = await service.ensureJobRecord(baseInput);
+    const failed = await service.markFailed(job.id, "failure");
+    await service.markRunning(job.id, "recovery");
+    const result = await service.markDeadLettered(job.id, failed.latestAttempt!.attemptNumber);
+    expect(result.status).toBe("running");
+    expect(await service.listAttempts(job.id)).toHaveLength(2);
   });
 });
-
-class RacyJobRepository implements JobRepository {
-  private jobs = new Map<string, JobRecord>();
-  created: JobRecord[] = [];
-
-  async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
-    // Stale read window where concurrent callers both observe no row.
-    return [];
-  }
-
-  async findById(jobId: string): Promise<JobRecord | null> {
-    return this.jobs.get(jobId) ?? null;
-  }
-
-  async create(input: CreateJobInput): Promise<JobRecord> {
-    const now = new Date();
-    const id = crypto.randomUUID();
-    const record: JobRecord = {
-      id,
-      accountId: input.accountId,
-      briefId: input.briefId,
-      taskId: input.taskId,
-      parentJobId: input.parentJobId,
-      type: input.type,
-      metadata: input.metadata,
-      status: "queued",
-      retryCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.jobs.set(id, record);
-    this.created.push(record);
-    return record;
-  }
-
-  async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      status: input.status,
-      workerId: input.workerId,
-      errorMessage: input.errorMessage,
-      updatedAt: new Date(),
-    };
-
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async incrementRetry(jobId: string): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      retryCount: existing.retryCount + 1,
-      updatedAt: new Date(),
-    };
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return [...this.jobs.values()].filter((job) => job.briefId === briefId);
-  }
-}
