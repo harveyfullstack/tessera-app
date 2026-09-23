@@ -58,3 +58,68 @@ export interface UpdateJobExecutionInput {
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
 }
+
+// Canonical Phase-2 schema: split delivery_jobs (intent) from delivery_attempts (history).
+export interface DeliveryJobRecord {
+  id: string;
+  accountId: string;
+  briefId: string;
+  taskId?: string | undefined;
+  parentJobId?: string | undefined;
+  type: JobType;
+  metadata: JobMetadata;
+  createdAt: Date;
+}
+
+export interface DeliveryAttemptRecord {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt?: Date | undefined;
+  completedAt?: Date | undefined;
+  createdAt: Date;
+}
+
+export interface CreateDeliveryAttemptInput {
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt?: Date | undefined;
+  completedAt?: Date | undefined;
+}
+
+export interface AttemptParityResult {
+  deliveryJobId: string;
+  accountId: string;
+  briefId: string;
+  type: JobType;
+  oldAttemptCount: number;
+  newAttemptCount: number;
+  matches: boolean;
+}
+
+export interface AggregateParityResult {
+  totalOldAttempts: number;
+  totalNewAttempts: number;
+  matches: boolean;
+  jobParities: AttemptParityResult[];
+}
+
+export function computeOldAttemptCount(job: JobRecord): number {
+  if (job.status === "queued" && !job.workerId && !job.startedAt && job.retryCount === 0) {
+    return 0;
+  }
+  if (job.status === "queued" && job.retryCount > 0) {
+    return job.retryCount;
+  }
+  return job.retryCount + 1;
+}
