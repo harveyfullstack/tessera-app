@@ -1,15 +1,26 @@
-import { JobNotFoundError } from "../domain/errors";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+import {
+  deriveDisplayStatus,
+  systemClock,
+  type Clock,
+  type JobDisplayStatus,
+} from "./delivery-display-status";
+import type { DeliveryAttemptReader } from "../domain/delivery-attempt-repository";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly attempts: DeliveryAttemptRpc,
+    private readonly attemptHistory: DeliveryAttemptReader,
+    private readonly now: Clock = systemClock,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -23,16 +34,8 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    const { job } = await this.attempts.markRunning(jobId, workerId);
+    return job;
   }
 
   async markFailed(
@@ -40,37 +43,18 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    const { job } = await this.attempts.markFailed(jobId, errorMessage, details);
+    return job;
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    const { job } = await this.attempts.markCompleted(jobId, details);
+    return job;
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    const { job } = await this.attempts.retry(jobId);
+    return job;
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
@@ -90,13 +74,19 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  // While the account's rollback window is open the legacy jobs.status column
+  // is still dual-written, so it is shown as-is; otherwise the status is
+  // derived from the job's delivery_attempts.
+  async displayStatus(job: JobRecord): Promise<JobDisplayStatus> {
+    if (await this.attempts.isRollbackWindowOpen(job.accountId)) {
+      return job.status;
+    }
+    return deriveDisplayStatus(await this.attemptHistory.listByJob(job.id), this.now());
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  // A stuck run is still a running attempt, so it blocks a new delivery too.
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
+    return status !== "running" && status !== "stuck";
   }
 }
