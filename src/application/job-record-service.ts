@@ -61,11 +61,18 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    return job.status;
+  static displayStatus(job: JobRecord, now: Date = new Date()): string {
+    if (job.executionSource !== "attempts") return job.status;
+    const latest = job.latestAttempt;
+    if (!latest) return "queued";
+    const staleAfterMs = 5 * 60 * 1000;
+    if (latest.status === "running" && latest.startedAt &&
+      now.getTime() - latest.startedAt.getTime() > staleAfterMs) return "stuck";
+    return latest.status;
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
-    return JobRecordService.displayStatus(job) !== "running";
+    const status = JobRecordService.displayStatus(job);
+    return !["running", "stuck", "dlq"].includes(status);
   }
 }

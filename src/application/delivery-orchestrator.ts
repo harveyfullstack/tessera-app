@@ -30,7 +30,10 @@ export class DeliveryOrchestrator {
       },
     );
 
-    if (job.status === "running") {
+    if (!JobRecordService.canStartNewDelivery(job)) {
+      if (JobRecordService.displayStatus(job) === "dlq") {
+        throw new Error(`Delivery is in the dead letter queue: ${job.id}`);
+      }
       throw new JobAlreadyRunningError(job.id);
     }
 
