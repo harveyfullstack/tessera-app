@@ -1,9 +1,18 @@
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
+import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
+import { StaticDeliveryRollbackFlag } from "../infrastructure/flags/static-delivery-rollback-flag";
+import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const attemptRepository = new InMemoryDeliveryAttemptRepository();
+const deliveryAttempts = new DeliveryAttemptRpc(
+  jobRepository,
+  attemptRepository,
+  new StaticDeliveryRollbackFlag(),
+);
+const jobRecords = new JobRecordService(jobRepository, deliveryAttempts);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {

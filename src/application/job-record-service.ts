@@ -1,4 +1,4 @@
-import { JobNotFoundError } from "../domain/errors";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
@@ -9,7 +9,10 @@ import type {
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly attempts: DeliveryAttemptRpc,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -23,16 +26,8 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    const { job } = await this.attempts.markRunning(jobId, workerId);
+    return job;
   }
 
   async markFailed(
@@ -40,37 +35,18 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    const { job } = await this.attempts.markFailed(jobId, errorMessage, details);
+    return job;
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    const { job } = await this.attempts.markCompleted(jobId, details);
+    return job;
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    const { job } = await this.attempts.retry(jobId);
+    return job;
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

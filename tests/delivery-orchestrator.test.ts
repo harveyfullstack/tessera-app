@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
 import { JobRecordService } from "../src/application/job-record-service";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
+import { StaticDeliveryRollbackFlag } from "../src/infrastructure/flags/static-delivery-rollback-flag";
+import { InMemoryDeliveryAttemptRepository } from "../src/infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 
 const baseRequest = {
@@ -14,9 +17,19 @@ const baseRequest = {
   workerId: "worker-us-east-04",
 } as const;
 
+function serviceWithInMemoryStores(): JobRecordService {
+  const jobs = new InMemoryJobRepository();
+  const rpc = new DeliveryAttemptRpc(
+    jobs,
+    new InMemoryDeliveryAttemptRepository(),
+    new StaticDeliveryRollbackFlag(),
+  );
+  return new JobRecordService(jobs, rpc);
+}
+
 describe("DeliveryOrchestrator", () => {
   test("completes a happy-path webhook delivery", async () => {
-    const service = new JobRecordService(new InMemoryJobRepository());
+    const service = serviceWithInMemoryStores();
     const orchestrator = new DeliveryOrchestrator(service);
 
     const result = await orchestrator.deliver({
@@ -29,7 +42,7 @@ describe("DeliveryOrchestrator", () => {
   });
 
   test("marks a failed run and increments retry count when simulateFailure is set", async () => {
-    const service = new JobRecordService(new InMemoryJobRepository());
+    const service = serviceWithInMemoryStores();
     const orchestrator = new DeliveryOrchestrator(service);
 
     const result = await orchestrator.deliver({
