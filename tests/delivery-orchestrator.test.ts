@@ -19,12 +19,9 @@ const baseRequest = {
 
 function serviceWithInMemoryStores(): JobRecordService {
   const jobs = new InMemoryJobRepository();
-  const rpc = new DeliveryAttemptRpc(
-    jobs,
-    new InMemoryDeliveryAttemptRepository(),
-    new StaticDeliveryRollbackFlag(),
-  );
-  return new JobRecordService(jobs, rpc);
+  const attempts = new InMemoryDeliveryAttemptRepository();
+  const rpc = new DeliveryAttemptRpc(jobs, attempts, new StaticDeliveryRollbackFlag());
+  return new JobRecordService(jobs, rpc, attempts);
 }
 
 describe("DeliveryOrchestrator", () => {

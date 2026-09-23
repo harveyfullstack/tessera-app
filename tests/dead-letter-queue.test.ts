@@ -33,7 +33,7 @@ function setup(budgets: RetryBudgetPolicy, closedRollbackAccounts: string[] = []
     attempts,
     new StaticDeliveryRollbackFlag(closedRollbackAccounts),
   );
-  const jobRecords = new JobRecordService(jobs, rpc);
+  const jobRecords = new JobRecordService(jobs, rpc, attempts);
   const inspector = new DeadLetterQueueInspector(attempts, budgets);
   return {
     jobRecords,

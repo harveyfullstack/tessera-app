@@ -98,6 +98,12 @@ export class DeliveryAttemptRpc {
     return this.record(jobId, { status: "queued" }, () => this.jobs.incrementRetry(jobId));
   }
 
+  // Read-only view of the rollback flag, so readers can tell whether the
+  // legacy job columns are still dual-written without consulting the flag.
+  isRollbackWindowOpen(accountId: string): Promise<boolean> {
+    return this.rollbackFlag.isRollbackWindowOpen(accountId);
+  }
+
   private record(
     jobId: string,
     transition: AttemptTransition,

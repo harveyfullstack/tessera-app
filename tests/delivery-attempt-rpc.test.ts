@@ -29,7 +29,7 @@ function setup(closedAccountIds: string[] = []) {
     attempts,
     new StaticDeliveryRollbackFlag(closedAccountIds),
   );
-  const service = new JobRecordService(jobs, rpc);
+  const service = new JobRecordService(jobs, rpc, attempts);
   const orchestrator = new DeliveryOrchestrator(service);
   return { jobs, attempts, rpc, orchestrator };
 }

@@ -1,14 +1,11 @@
-import type { DeliveryAttempt } from "../domain/delivery-attempt";
-import type { DeliveryAttemptRepository } from "../domain/delivery-attempt-repository";
+import { latestRunAttempt, type DeliveryAttempt } from "../domain/delivery-attempt";
+import type { DeliveryAttemptReader } from "../domain/delivery-attempt-repository";
 import type { JobRecord, JobStatus } from "../domain/job";
 import type { RetryBudgetPolicy } from "./retry-budget-policy";
 
 export const DLQ_ATTEMPT_BODY_LIMIT = 3;
 
 const TERMINAL_STATUSES: ReadonlySet<JobStatus> = new Set(["completed", "failed", "cancelled"]);
-
-// Read side only: execution writes go through DeliveryAttemptRpc.
-export type DeliveryAttemptReader = Pick<DeliveryAttemptRepository, "listByJob">;
 
 export interface DlqAttemptBody {
   // null when the body comes from the legacy jobs row, which has no attempt number.
@@ -102,8 +99,7 @@ function newestFirst(attempts: readonly DeliveryAttempt[]): DeliveryAttempt[] {
 // Status of the latest run. 'queued' rows are scheduled retries, not runs, and
 // DeliveryOrchestrator writes one between a run's 'running' and 'failed' rows.
 function latestStatusOf(job: JobRecord, attempts: readonly DeliveryAttempt[]): JobStatus {
-  const latestRun = newestFirst(attempts).find((attempt) => attempt.status !== "queued");
-  return latestRun?.status ?? job.status;
+  return latestRunAttempt(attempts)?.status ?? job.status;
 }
 
 function lastAttemptBodies(

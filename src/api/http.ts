@@ -14,7 +14,7 @@ const deliveryAttempts = new DeliveryAttemptRpc(
   attemptRepository,
   new StaticDeliveryRollbackFlag(),
 );
-const jobRecords = new JobRecordService(jobRepository, deliveryAttempts);
+const jobRecords = new JobRecordService(jobRepository, deliveryAttempts, attemptRepository);
 const delivery = new DeliveryOrchestrator(jobRecords);
 const dlqInspector = new DeadLetterQueueInspector(attemptRepository, new RetryBudgetPolicy());
 

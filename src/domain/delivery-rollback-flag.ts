@@ -4,7 +4,8 @@
 // delivery_attempts, so the account can be rolled back to the old model and
 // the old/new attempt-count parity check stays valid.
 //
-// Only DeliveryAttemptRpc may consult this flag.
+// Only DeliveryAttemptRpc may consult this flag. Other readers ask
+// DeliveryAttemptRpc.isRollbackWindowOpen.
 export interface DeliveryRollbackFlag {
   isRollbackWindowOpen(accountId: string): Promise<boolean>;
 }
