@@ -32,7 +32,7 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Compatibility projection: immutable intent plus the current execution state.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
@@ -57,4 +57,25 @@ export interface UpdateJobExecutionInput {
   workerId?: string | undefined;
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
+  incrementRetry?: boolean;
+}
+
+export type DeliveryJob = Pick<JobRecord,
+  "id" | "accountId" | "briefId" | "taskId" | "parentJobId" | "type" | "metadata" | "createdAt">;
+
+export interface DeliveryAttempt extends JobExecutionDetails {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  status: JobStatus;
+  errorMessage?: string | undefined;
+  startedAt?: Date | undefined;
+  completedAt?: Date | undefined;
+  createdAt: Date;
+}
+
+export interface DeliveryRollout {
+  enabled: boolean;
+  enabledAt?: Date | undefined;
+  rollbackUntil?: Date | undefined;
 }

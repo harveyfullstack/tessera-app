@@ -56,3 +56,34 @@ not delete them after the window. Run the SQL verification fixture in a
 disposable database with `psql -v ON_ERROR_STOP=1 -f sql/verification/delivery_history.sql`.
 The schema gate is preparation for cutover, not evidence that a production
 cohort or rollback rehearsal has passed.
+
+## Activate complete capture
+
+Quiesce legacy writers before taking the `002` baseline and keep them paused
+until `003_delivery_attempt_rpc.sql` and the application RPC are installed.
+A legacy writer running in that gap could overwrite execution state with no
+recorded event. Resume workers only through `append_delivery_attempt`; then
+resolve historical evidence and evaluate the account gate. For an existing
+installation that already had such a gap, leave cutover blocked until its
+missing history is resolved from an authoritative source.
+
+The SQL RPC locks the legacy job row to allocate event numbers across workers.
+Its security-definer search path is fixed to `pg_catalog`, its table references
+are schema-qualified, and PUBLIC cannot execute it. The deployment owner must
+grant EXECUTE only to its trusted worker role and remove direct write privileges
+on jobs/events from that role. There is no tenant-facing database role in this
+repository; the trusted caller must authorize job IDs before invoking the RPC.
+
+For duplicate intents that cannot migrate, the expanded `delivery_legacy_events`
+ledger retains worker, status, response, error and timing fields in full. Such
+accounts continue to fail cutover checks; capture does not falsely resolve their
+old history. The in-memory demo adapter likewise treats all seeded legacy rows
+as unresolved and captures their prospective events in the compatibility ledger.
+
+A second `running` transition while already running is rejected atomically,
+preventing racing workers from starting the same delivery. Accepted execution
+transitions each receive a new event; supplied attempt numbers are ignored.
+
+Run `sql/verification/delivery_rpc.sql` in an empty disposable database to check
+both migrations and capture during rollback. Keep compatibility writes active
+for the entire 14-day rollback window; flipping the flag never stops capture.
