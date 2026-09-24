@@ -4,6 +4,7 @@ import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-mem
 import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { InMemoryDeliveryRollbackFlag } from "../src/infrastructure/flags/in-memory-delivery-rollback-flag";
 import { InMemoryDeliveryAttemptRepository } from "../src/infrastructure/repositories/in-memory-delivery-attempt-repository";
+import { STUCK_ATTEMPT_THRESHOLD_MS } from "../src/domain/delivery-display-status";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
   CreateJobInput,
@@ -96,6 +97,95 @@ describe("JobRecordService", () => {
 
     expect(a.id).not.toBe(b.id);
     expect(repo.created.length).toBe(2);
+  });
+});
+
+function displaySetup(rolledBackAccountIds: string[] = []) {
+  const repo = new InMemoryJobRepository();
+  const attempts = new InMemoryDeliveryAttemptRepository();
+  const clock = { now: new Date() };
+  const service = new JobRecordService(
+    repo,
+    new DeliveryAttemptRpc(repo, attempts, new InMemoryDeliveryRollbackFlag(rolledBackAccountIds)),
+    () => clock.now,
+  );
+  return { repo, attempts, clock, service };
+}
+
+describe("JobRecordService display status", () => {
+  test("is queued when the job has no attempts", async () => {
+    const { service } = displaySetup();
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+    expect(await service.canStartNewDelivery(job)).toBe(true);
+  });
+
+  test("follows the latest attempt, not earlier ones or jobs.status", async () => {
+    const { repo, service } = displaySetup();
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    await service.markFailed(job.id, "endpoint timeout after 30s");
+    await service.retry(job.id);
+    await service.markRunning(job.id, "worker-us-east-07");
+    await service.markCompleted(job.id, { responseStatus: 200 });
+
+    const stored = await repo.findById(job.id);
+    expect(stored?.status).toBe("queued");
+    expect(await service.displayStatus(job)).toBe("completed");
+
+    await service.markRunning(job.id, "worker-us-east-09");
+    expect(await service.displayStatus(job)).toBe("running");
+  });
+
+  test("marks a running attempt stuck only once it is more than 5 minutes old", async () => {
+    const { attempts, clock, service } = displaySetup();
+    const job = await service.ensureJobRecord(baseInput);
+    await service.markRunning(job.id, "worker-us-east-04");
+    const [attempt] = await attempts.listByJob(job.id);
+    const startedAt = attempt?.startedAt.getTime() ?? 0;
+
+    clock.now = new Date(startedAt + STUCK_ATTEMPT_THRESHOLD_MS);
+    expect(await service.displayStatus(job)).toBe("running");
+    expect(await service.canStartNewDelivery(job)).toBe(false);
+
+    clock.now = new Date(startedAt + STUCK_ATTEMPT_THRESHOLD_MS + 1);
+    expect(await service.displayStatus(job)).toBe("stuck");
+    expect(await service.canStartNewDelivery(job)).toBe(true);
+  });
+
+  test("never marks a terminal attempt stuck", async () => {
+    const { clock, service } = displaySetup();
+    const job = await service.ensureJobRecord(baseInput);
+    await service.markRunning(job.id, "worker-us-east-04");
+    await service.markFailed(job.id, "endpoint timeout after 30s");
+
+    clock.now = new Date(clock.now.getTime() + 60 * 60 * 1000);
+    expect(await service.displayStatus(job)).toBe("failed");
+  });
+
+  test("falls back to jobs.status when the rollback flag is on", async () => {
+    const { attempts, clock, service } = displaySetup([baseInput.accountId]);
+    const job = await service.ensureJobRecord(baseInput);
+    const running = await service.markRunning(job.id, "worker-us-east-04");
+
+    clock.now = new Date(clock.now.getTime() + 60 * 60 * 1000);
+    expect(await attempts.listByJob(job.id)).toEqual([]);
+    expect(await service.displayStatus(running)).toBe("running");
+    expect(await service.canStartNewDelivery(running)).toBe(false);
+  });
+
+  test("lists brief jobs with the derived status and otherwise unchanged fields", async () => {
+    const { repo, service } = displaySetup();
+    const job = await service.ensureJobRecord(baseInput);
+    await service.markRunning(job.id, "worker-us-east-04");
+
+    const [listed] = await service.listByBrief(baseInput.briefId);
+    const stored = await repo.findById(job.id);
+    if (!stored) throw new Error("expected the stored job row");
+
+    expect(listed).toEqual({ ...stored, status: "running" });
   });
 });
 

@@ -20,6 +20,10 @@ export interface DlqSummary {
   endpoints: DlqBoundEndpoint[];
 }
 
+// The job fields DLQ evaluation reads. Execution status is not among them, so
+// both stored rows and display listings can be evaluated.
+export type DlqCandidate = Pick<JobRecord, "id" | "accountId" | "briefId" | "type" | "metadata">;
+
 // A webhook dispatch is DLQ-bound when it has used its whole retry budget
 // (attempt rows, one per execution) and its latest attempt failed.
 export class DlqInspector {
@@ -28,7 +32,7 @@ export class DlqInspector {
     private readonly budgets: RetryBudgetPolicy,
   ) {}
 
-  async evaluate(job: JobRecord): Promise<DlqBoundEndpoint | null> {
+  async evaluate(job: DlqCandidate): Promise<DlqBoundEndpoint | null> {
     if (job.type !== "dispatch_webhook") {
       return null;
     }
@@ -55,12 +59,12 @@ export class DlqInspector {
     };
   }
 
-  async findDlqBound(jobs: readonly JobRecord[]): Promise<DlqBoundEndpoint[]> {
+  async findDlqBound(jobs: readonly DlqCandidate[]): Promise<DlqBoundEndpoint[]> {
     const evaluated = await Promise.all(jobs.map((job) => this.evaluate(job)));
     return evaluated.filter((endpoint): endpoint is DlqBoundEndpoint => endpoint !== null);
   }
 
-  async summarize(jobs: readonly JobRecord[]): Promise<DlqSummary> {
+  async summarize(jobs: readonly DlqCandidate[]): Promise<DlqSummary> {
     const endpoints = await this.findDlqBound(jobs);
     return { count: endpoints.length, endpoints };
   }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
 import { JobRecordService } from "../src/application/job-record-service";
+import { JobAlreadyRunningError } from "../src/domain/errors";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 
 const baseRequest = {
@@ -40,5 +41,20 @@ describe("DeliveryOrchestrator", () => {
     expect(result.status).toBe("failed");
     expect(result.retryCount).toBe(1);
     expect(result.errorMessage).toContain("Simulated webhook delivery failure");
+  });
+
+  test("rejects a new delivery while the latest attempt is running", async () => {
+    const service = new JobRecordService(new InMemoryJobRepository());
+    const orchestrator = new DeliveryOrchestrator(service);
+    const job = await service.ensureWebhookDispatchJob(baseRequest.accountId, baseRequest.briefId, {
+      customerId: baseRequest.customerId,
+      subscriptionId: baseRequest.subscriptionId,
+      endpointUrl: baseRequest.endpointUrl,
+      eventType: baseRequest.eventType,
+      payloadHash: baseRequest.payloadHash,
+    });
+    await service.markRunning(job.id, "worker-us-east-07");
+
+    await expect(orchestrator.deliver(baseRequest)).rejects.toBeInstanceOf(JobAlreadyRunningError);
   });
 });

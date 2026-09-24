@@ -3,7 +3,7 @@ import type { DeliveryAttempt } from "../domain/delivery-attempt";
 import type { DeliveryAttemptRepository } from "../domain/delivery-attempt-repository";
 import type { DeliveryRollbackFlag } from "../domain/delivery-rollback-flag";
 import type { JobRepository } from "../domain/job-repository";
-import type { JobExecutionDetails, JobRecord } from "../domain/job";
+import type { JobExecutionDetails, JobRecord, JobStatus } from "../domain/job";
 
 // Upper bound on attempt_number conflicts one markRunning call will absorb
 // before surfacing the unique-index violation.
@@ -14,6 +14,12 @@ interface AttemptOutcome {
   errorBody?: string | undefined;
   details?: JobExecutionDetails | undefined;
 }
+
+// Where a job's execution state lives for its account: the legacy jobs row
+// when the rollback flag is on, otherwise the latest delivery_attempts row.
+export type ExecutionState =
+  | { source: "jobs"; status: JobStatus }
+  | { source: "attempts"; latest: DeliveryAttempt | null };
 
 // Single write boundary for delivery execution state, and the only place the
 // per-account rollback flag is read. With the flag off, each execution is one
@@ -83,6 +89,16 @@ export class DeliveryAttemptRpc {
     }
 
     return this.projectLatestAttempt(job);
+  }
+
+  // Read side of the same flag decision the writes above make, so callers
+  // never read the rollback flag themselves.
+  async readExecutionState(job: JobRecord): Promise<ExecutionState> {
+    if (await this.rollbackFlag.isRollbackEnabled(job.accountId)) {
+      return { source: "jobs", status: job.status };
+    }
+
+    return { source: "attempts", latest: await this.attempts.findLatestByJob(job.id) };
   }
 
   private async requireJob(jobId: string): Promise<JobRecord> {

@@ -53,6 +53,10 @@ export class InMemoryDeliveryAttemptRepository implements DeliveryAttemptReposit
       .sort((a, b) => a.attemptNumber - b.attemptNumber);
   }
 
+  async findLatestByJob(deliveryJobId: string): Promise<DeliveryAttempt | null> {
+    return (await this.listByJob(deliveryJobId)).at(-1) ?? null;
+  }
+
   async update(next: DeliveryAttempt): Promise<DeliveryAttempt> {
     const current = this.attempts.get(next.id);
     if (!current) {

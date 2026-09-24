@@ -7,6 +7,8 @@ export interface DeliveryAttemptRepository {
   insert(input: NewDeliveryAttempt): Promise<DeliveryAttempt>;
   // Ordered by attemptNumber ascending.
   listByJob(deliveryJobId: string): Promise<DeliveryAttempt[]>;
+  // The row with MAX(attempt_number) for the job, or null when it has none.
+  findLatestByJob(deliveryJobId: string): Promise<DeliveryAttempt | null>;
   // Replaces the row with the same id. Throws DeliveryAttemptMutationError
   // for anything other than running -> terminal on the mutable columns.
   update(next: DeliveryAttempt): Promise<DeliveryAttempt>;
