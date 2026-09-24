@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { JobRecordService } from "../src/application/job-record-service";
+import { InMemoryDeliveryAttemptStore } from "../src/infrastructure/repositories/in-memory-delivery-attempt-store";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
@@ -25,7 +26,7 @@ const baseInput: CreateJobInput = {
 describe("JobRecordService", () => {
   test("reuses canonical job when one already exists", async () => {
     const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const service = new JobRecordService(repo, new InMemoryDeliveryAttemptStore());
 
     const first = await service.ensureJobRecord(baseInput);
     const second = await service.ensureJobRecord(baseInput);
@@ -35,7 +36,7 @@ describe("JobRecordService", () => {
 
   test("mutates the same row across retries and overwrites terminal execution details", async () => {
     const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const service = new JobRecordService(repo, new InMemoryDeliveryAttemptStore());
 
     const job = await service.ensureJobRecord(baseInput);
 
@@ -53,7 +54,7 @@ describe("JobRecordService", () => {
 
   test("can produce duplicate intent rows under race conditions", async () => {
     const repo = new RacyJobRepository();
-    const service = new JobRecordService(repo);
+    const service = new JobRecordService(repo, new InMemoryDeliveryAttemptStore());
 
     const [a, b] = await Promise.all([
       service.ensureJobRecord(baseInput),

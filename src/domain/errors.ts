@@ -15,3 +15,9 @@ export class DeliverySchemaMigrationError extends Error {
     super(message);
   }
 }
+
+export class DuplicateDeliveryAttemptError extends Error {
+  constructor(deliveryJobId: string, attemptNumber: number) {
+    super(`duplicate delivery attempt ${deliveryJobId}#${attemptNumber}`);
+  }
+}
