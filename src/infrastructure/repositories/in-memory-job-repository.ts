@@ -131,7 +131,7 @@ export class InMemoryJobRepository implements JobRepository, DeliveryJobReposito
 
     const now = new Date();
     const deliveryJob: DeliveryJobRecord = {
-      id: randomUUID(),
+      id: (input as { id?: string }).id ?? randomUUID(),
       accountId: input.accountId,
       briefId: input.briefId,
       taskId: input.taskId,
@@ -148,9 +148,24 @@ export class InMemoryJobRepository implements JobRepository, DeliveryJobReposito
   async createDeliveryAttempt(
     input: CreateDeliveryAttemptInput,
   ): Promise<DeliveryAttemptRecord> {
-    const job = this.deliveryJobs.get(input.deliveryJobId);
+    let job = this.deliveryJobs.get(input.deliveryJobId);
     if (!job) {
-      throw new DeliveryJobNotFoundError(input.deliveryJobId);
+      const legacy = this.jobs.get(input.deliveryJobId);
+      if (legacy) {
+        job = {
+          id: legacy.id,
+          accountId: legacy.accountId,
+          briefId: legacy.briefId,
+          taskId: legacy.taskId,
+          parentJobId: legacy.parentJobId,
+          type: legacy.type,
+          metadata: legacy.metadata,
+          createdAt: legacy.createdAt,
+        };
+        this.deliveryJobs.set(job.id, job);
+      } else {
+        throw new DeliveryJobNotFoundError(input.deliveryJobId);
+      }
     }
 
     const attempts = this.deliveryAttempts.get(input.deliveryJobId) ?? [];
