@@ -1,9 +1,16 @@
+import { briefIdFromJobsPath, loadBriefJobs } from "./brief-jobs";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
+import { DlqDrainProcessor } from "../application/dlq-drain-processor";
 import { JobRecordService } from "../application/job-record-service";
+import { NoRollbackFlags } from "../domain/delivery-rollback";
+import { AccountRetryBudgets } from "../domain/retry-budget";
+import { InMemoryDeliveryAttemptStore } from "../infrastructure/repositories/in-memory-delivery-attempt-store";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const deliveryAttempts = new InMemoryDeliveryAttemptStore();
+const jobRecords = new JobRecordService(jobRepository, deliveryAttempts, new NoRollbackFlags());
+const dlqDrain = new DlqDrainProcessor(jobRepository, deliveryAttempts, new AccountRetryBudgets());
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -24,12 +31,10 @@ export const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
 
-    if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
-      const [, briefs, briefId, jobs] = url.pathname.split("/");
-      if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
-      }
+    const briefId = briefIdFromJobsPath(url.pathname);
+    if (req.method === "GET" && briefId) {
+      const body = await loadBriefJobs(briefId, url.searchParams.get("status"), jobRecords, dlqDrain);
+      return Response.json(body);
     }
 
     if (req.method === "POST" && url.pathname === "/deliver") {
