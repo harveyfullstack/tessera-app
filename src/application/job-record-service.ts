@@ -3,6 +3,7 @@ import type { JobRepository } from "../domain/job-repository";
 import type { DeliveryJobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
@@ -72,13 +73,77 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord, now: Date = new Date()): Promise<string> {
+    // Fall back to jobs.status when the rollback feature flag is on
+    if (this.rpc.isRollbackActive(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    let latestAttempt: DeliveryAttemptRecord | null = null;
+    if (typeof (this.jobs as DeliveryJobRepository).getLatestDeliveryAttempt === "function") {
+      latestAttempt = await (this.jobs as DeliveryJobRepository).getLatestDeliveryAttempt(job.id);
+    }
+
+    if (!latestAttempt) {
+      return "queued";
+    }
+
+    if (latestAttempt.status === "running" && latestAttempt.startedAt) {
+      const fiveMinutesMs = 5 * 60 * 1000;
+      if (now.getTime() - latestAttempt.startedAt.getTime() > fiveMinutesMs) {
+        return "stuck";
+      }
+    }
+
+    return latestAttempt.status;
+  }
+
+  static async displayStatus(
+    job: JobRecord,
+    options?: {
+      rpc?: DeliveryAttemptRpc;
+      repository?: JobRepository & Partial<DeliveryJobRepository>;
+      latestAttempt?: DeliveryAttemptRecord | null;
+      now?: Date;
+    },
+  ): Promise<string> {
+    const now = options?.now ?? new Date();
+    if (options?.rpc && options.rpc.isRollbackActive(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    let latestAttempt = options?.latestAttempt;
+    if (latestAttempt === undefined && options?.repository) {
+      if (typeof (options.repository as DeliveryJobRepository).getLatestDeliveryAttempt === "function") {
+        latestAttempt = await (options.repository as DeliveryJobRepository).getLatestDeliveryAttempt(
+          job.id,
+        );
+      }
+    }
+
+    if (!latestAttempt) {
+      if (options?.latestAttempt === null || options?.repository) {
+        return "queued";
+      }
+      return job.status ?? "queued";
+    }
+
+    if (latestAttempt.status === "running" && latestAttempt.startedAt) {
+      const fiveMinutesMs = 5 * 60 * 1000;
+      if (now.getTime() - latestAttempt.startedAt.getTime() > fiveMinutesMs) {
+        return "stuck";
+      }
+    }
+
+    return latestAttempt.status;
+  }
+
+  async canStartNewDelivery(job: JobRecord, now?: Date): Promise<boolean> {
+    const status = await this.displayStatus(job, now);
+    return status !== "running" && status !== "stuck";
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+    return job.status !== "running";
   }
 }
