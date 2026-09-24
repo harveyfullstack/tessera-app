@@ -1,10 +1,12 @@
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
+import { DlqProcessor } from "../application/dlq-processor";
 import { JobRecordService } from "../application/job-record-service";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
-const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
-const delivery = new DeliveryOrchestrator(jobRecords);
+export const jobRepository = new InMemoryJobRepository();
+export const jobRecords = new JobRecordService(jobRepository);
+export const dlqProcessor = new DlqProcessor(jobRepository, jobRecords);
+export const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
   briefId: string;
@@ -27,8 +29,17 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const statusFilter = url.searchParams.get("status");
+        let rows = await jobRecords.listByBrief(briefId);
+        const dlq = await dlqProcessor.getDlqSummary(briefId);
+
+        if (statusFilter === "dlq") {
+          rows = await dlqProcessor.filterDlqJobs(rows);
+        } else if (statusFilter) {
+          rows = rows.filter((r) => r.status === statusFilter);
+        }
+
+        return Response.json({ jobs: rows, dlq });
       }
     }
 

@@ -1,15 +1,29 @@
 import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
+import type { DeliveryJobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
   JobType,
 } from "../domain/job";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  private readonly rpc: DeliveryAttemptRpc;
+
+  constructor(
+    private readonly jobs: JobRepository & Partial<DeliveryJobRepository>,
+    rpc?: DeliveryAttemptRpc,
+  ) {
+    this.rpc = rpc ?? new DeliveryAttemptRpc(jobs);
+  }
+
+  getRpc(): DeliveryAttemptRpc {
+    return this.rpc;
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -23,16 +37,7 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.rpc.markRunning(jobId, workerId);
   }
 
   async markFailed(
@@ -40,37 +45,15 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.rpc.markFailed(jobId, errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.rpc.markCompleted(jobId, details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.rpc.retry(jobId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
@@ -90,13 +73,77 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord, now: Date = new Date()): Promise<string> {
+    // Fall back to jobs.status when the rollback feature flag is on
+    if (this.rpc.isRollbackActive(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    let latestAttempt: DeliveryAttemptRecord | null = null;
+    if (typeof (this.jobs as DeliveryJobRepository).getLatestDeliveryAttempt === "function") {
+      latestAttempt = await (this.jobs as DeliveryJobRepository).getLatestDeliveryAttempt(job.id);
+    }
+
+    if (!latestAttempt) {
+      return "queued";
+    }
+
+    if (latestAttempt.status === "running" && latestAttempt.startedAt) {
+      const fiveMinutesMs = 5 * 60 * 1000;
+      if (now.getTime() - latestAttempt.startedAt.getTime() > fiveMinutesMs) {
+        return "stuck";
+      }
+    }
+
+    return latestAttempt.status;
+  }
+
+  static async displayStatus(
+    job: JobRecord,
+    options?: {
+      rpc?: DeliveryAttemptRpc;
+      repository?: JobRepository & Partial<DeliveryJobRepository>;
+      latestAttempt?: DeliveryAttemptRecord | null;
+      now?: Date;
+    },
+  ): Promise<string> {
+    const now = options?.now ?? new Date();
+    if (options?.rpc && options.rpc.isRollbackActive(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    let latestAttempt = options?.latestAttempt;
+    if (latestAttempt === undefined && options?.repository) {
+      if (typeof (options.repository as DeliveryJobRepository).getLatestDeliveryAttempt === "function") {
+        latestAttempt = await (options.repository as DeliveryJobRepository).getLatestDeliveryAttempt(
+          job.id,
+        );
+      }
+    }
+
+    if (!latestAttempt) {
+      if (options?.latestAttempt === null || options?.repository) {
+        return "queued";
+      }
+      return job.status ?? "queued";
+    }
+
+    if (latestAttempt.status === "running" && latestAttempt.startedAt) {
+      const fiveMinutesMs = 5 * 60 * 1000;
+      if (now.getTime() - latestAttempt.startedAt.getTime() > fiveMinutesMs) {
+        return "stuck";
+      }
+    }
+
+    return latestAttempt.status;
+  }
+
+  async canStartNewDelivery(job: JobRecord, now?: Date): Promise<boolean> {
+    const status = await this.displayStatus(job, now);
+    return status !== "running" && status !== "stuck";
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+    return job.status !== "running";
   }
 }
