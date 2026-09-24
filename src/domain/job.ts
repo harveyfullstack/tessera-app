@@ -58,3 +58,13 @@ export interface UpdateJobExecutionInput {
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
 }
+
+// Status shown to users. On the split path it is derived from the latest
+// delivery attempt; "stuck" marks a running attempt that has gone quiet.
+export type JobDisplayStatus = JobStatus | "stuck";
+
+// A job row as listed to users: same fields as JobRecord, with status
+// replaced by the derived display status.
+export interface JobListing extends Omit<JobRecord, "status"> {
+  status: JobDisplayStatus;
+}
