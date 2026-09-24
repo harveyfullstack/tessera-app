@@ -8,18 +8,21 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
+  JobStatus,
 } from "../domain/job";
+
+const STUCK_AFTER_MS = 5 * 60 * 1000;
 
 export class JobRecordService {
   private readonly rpc: DeliveryAttemptRpc;
 
   constructor(
     private readonly jobs: JobRepository,
-    attempts: DeliveryAttemptStore,
+    private readonly attempts: DeliveryAttemptStore,
     flags: DeliveryRollbackFlags = new NoRollbackFlags(),
+    private readonly now: () => Date = () => new Date(),
   ) {
-    this.rpc = new DeliveryAttemptRpc(jobs, attempts, flags);
+    this.rpc = new DeliveryAttemptRpc(jobs, attempts, flags, now);
   }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
@@ -82,13 +85,30 @@ export class JobRecordService {
     return existing;
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<JobStatus | "stuck"> {
+    if (this.rpc.isRollbackEnabled(job.accountId)) {
+      return job.status;
+    }
+
+    const latest = await this.attempts.latest(job.id);
+    if (!latest) {
+      return "queued";
+    }
+    if (latest.status === "running" && this.isStuck(latest)) {
+      return "stuck";
+    }
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
+  }
+
+  private isStuck(attempt: { startedAt?: Date | undefined }): boolean {
+    if (attempt.startedAt === undefined) {
+      return false;
+    }
+    return this.now().getTime() - attempt.startedAt.getTime() > STUCK_AFTER_MS;
   }
 }

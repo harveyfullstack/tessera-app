@@ -20,6 +20,7 @@ export class DeliveryAttemptRpc {
     private readonly jobs: JobRepository,
     private readonly attempts: DeliveryAttemptStore,
     private readonly flags: DeliveryRollbackFlags,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   isRollbackEnabled(accountId: string): boolean {
@@ -97,6 +98,7 @@ export class DeliveryAttemptRpc {
       ...(write.responseStatus !== undefined ? { responseStatus: write.responseStatus } : {}),
       ...(write.responseLatencyMs !== undefined ? { responseLatencyMs: write.responseLatencyMs } : {}),
       ...(write.errorBody !== undefined ? { errorBody: write.errorBody } : {}),
+      ...(write.status === "running" ? { startedAt: this.now() } : {}),
     };
   }
 

@@ -26,6 +26,7 @@ export interface DeliveryAttempt {
   responseStatus?: number | undefined;
   responseLatencyMs?: number | undefined;
   errorBody?: string | undefined;
+  startedAt?: Date | undefined;
 }
 
 export interface AttemptCountParity {
