@@ -3,6 +3,7 @@ import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   DeliveryDisplayRecord,
+  DeadLetterSummary,
   DeliveryDisplayStatus,
   JobExecutionDetails,
   JobMetadata,
@@ -32,11 +33,13 @@ export class JobRecordService {
     jobId: string,
     errorMessage: string,
     details?: JobExecutionDetails,
+    incrementRetry = false,
   ): Promise<JobRecord> {
     return this.execution.append(jobId, {
       status: "failed",
       errorMessage,
       details,
+      incrementRetry,
     });
   }
 
@@ -51,12 +54,25 @@ export class JobRecordService {
     return this.execution.append(jobId, { status: "queued", incrementRetry: true });
   }
 
-  async listByBrief(briefId: string, now = new Date()): Promise<DeliveryDisplayRecord[]> {
-    const jobs = await this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string, now = new Date(), accountId?: string): Promise<DeliveryDisplayRecord[]> {
+    const jobs = (await this.jobs.listByBrief(briefId)).filter((job) => !accountId || job.accountId === accountId);
     return Promise.all(jobs.map(async (job) => ({
       ...job,
       status: await this.displayStatus(job.id, now),
     })));
+  }
+
+  async deadLetterSummary(accountId: string, briefId: string): Promise<DeadLetterSummary> {
+    const endpoints = await this.jobs.listDeadLetters(accountId, briefId);
+    return { pastBudgetCount: new Set(endpoints.map((entry) => entry.endpointUrl)).size, endpoints };
+  }
+
+  drainDeadLetters(accountId: string, briefId: string) {
+    return this.jobs.drainDeadLetters(accountId, briefId);
+  }
+
+  setRetryBudget(accountId: string, budget: number): Promise<void> {
+    return this.jobs.setRetryBudget(accountId, budget);
   }
 
   async ensureWebhookDispatchJob(

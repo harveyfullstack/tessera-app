@@ -40,3 +40,21 @@ procedures are documented in `sql/DELIVERY_MIGRATION.md`.
 Enabled accounts display the highest-numbered execution event, or `queued` for
 empty history. A running event whose start is more than five minutes old displays
 `stuck`; it remains in flight until an explicit retry or terminal transition.
+
+A delivery enters the Dead Letter Queue after **8 failed deliveries** by default
+(`failedAttemptCount >= retryBudget`). Running transitions do not consume that
+budget. Configure accounts with a JSON object, for example
+`DELIVERY_RETRY_BUDGETS='{"tessera-demo-account":3}'`. Failure recording increments
+legacy retry count atomically; exhausted deliveries cannot start another send.
+
+`GET /briefs/:briefId/jobs` includes `dlq.pastBudgetCount` (distinct exhausted
+endpoints) and `dlq.endpoints`, each containing its job ID, failed delivery count
+and up to three error bodies, newest first. `?status=dlq` limits the jobs array to
+queued dead letters. The handler scopes all results to its configured account.
+The `drain_dlq` processor records its lifecycle through the execution RPC and
+idempotently queues exhausted dispatch jobs.
+
+An explicit `JobRecordService.retry(jobId)` records a queued replay transition,
+removes current DLQ membership and starts a new failure budget. Success also
+resets that budget. Previous execution history remains available, including
+through rollback. Automatic failures do not issue that replay transition.

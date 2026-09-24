@@ -1,10 +1,11 @@
 import { randomUUID } from "crypto";
-import { JobAlreadyRunningError, JobNotFoundError } from "../../domain/errors";
+import { DeliveryExhaustedError, JobAlreadyRunningError, JobNotFoundError } from "../../domain/errors";
 import type {
   JobRepository,
 } from "../../domain/job-repository";
 import type {
   CreateJobInput,
+  DeadLetterEntry,
   DeliveryAttempt,
   DeliveryJob,
   DeliveryRollout,
@@ -16,6 +17,8 @@ const rollbackWindowMs = 14 * 24 * 60 * 60 * 1000;
 const key = (job: CreateJobInput) => JSON.stringify([job.accountId, job.briefId, job.type]);
 
 export class InMemoryJobRepository implements JobRepository {
+  private readonly retryBudgets = new Map<string, number>();
+  private readonly deadLetters = new Map<string, DeadLetterEntry>();
   private readonly jobs = new Map<string, JobRecord>();
   private readonly intents = new Map<string, DeliveryJob>();
   private readonly intentKeys = new Map<string, string>();
@@ -53,6 +56,9 @@ export class InMemoryJobRepository implements JobRepository {
     const job = this.jobs.get(jobId);
     if (!job) throw new JobNotFoundError(jobId);
     if (input.status === "running" && job.status === "running") throw new JobAlreadyRunningError(jobId);
+    if (input.status === "running" && job.type === "dispatch_webhook" && this.exhausted(job)) {
+      throw new DeliveryExhaustedError(jobId);
+    }
     const now = new Date();
     const history = this.legacyAttempts.get(jobId) ?? [];
     const workerId = input.workerId ?? input.details?.workerId ?? job.workerId;
@@ -73,7 +79,49 @@ export class InMemoryJobRepository implements JobRepository {
     this.legacyAttempts.set(jobId, [...history, structuredClone(attempt)]);
     if (this.intents.has(jobId)) this.attempts.set(jobId, [...(this.attempts.get(jobId) ?? []), structuredClone(attempt)]);
     this.jobs.set(jobId, updated);
+    if (input.status === "queued" || input.status === "completed") this.deadLetters.delete(jobId);
     return structuredClone(updated);
+  }
+
+  private failures(jobId: string): DeliveryAttempt[] {
+    const history = this.legacyAttempts.get(jobId) ?? [];
+    let failures: DeliveryAttempt[] = [];
+    for (const attempt of history) {
+      if (attempt.status === "queued" || attempt.status === "completed") failures = [];
+      else if (attempt.status === "failed") failures.push(attempt);
+    }
+    return failures;
+  }
+
+  private exhausted(job: JobRecord): boolean {
+    return this.failures(job.id).length >= (this.retryBudgets.get(job.accountId) ?? 8);
+  }
+
+  async setRetryBudget(accountId: string, budget: number): Promise<void> {
+    if (!Number.isSafeInteger(budget) || budget < 1) throw new Error("Retry budget must be a positive integer");
+    this.retryBudgets.set(accountId, budget);
+  }
+
+  async drainDeadLetters(accountId: string, briefId: string): Promise<DeadLetterEntry[]> {
+    for (const job of this.jobs.values()) {
+      if (job.accountId !== accountId || job.briefId !== briefId || job.type !== "dispatch_webhook") continue;
+      if (job.status !== "failed" || !this.exhausted(job)) {
+        this.deadLetters.delete(job.id);
+        continue;
+      }
+      const failures = this.failures(job.id);
+      this.deadLetters.set(job.id, {
+        deliveryJobId: job.id, accountId, briefId, endpointUrl: job.metadata.endpointUrl,
+        failedAttemptCount: failures.length,
+        lastAttemptBodies: failures.slice(-3).reverse().map((attempt) => attempt.errorBody ?? null),
+        enqueuedAt: this.deadLetters.get(job.id)?.enqueuedAt ?? new Date(),
+      });
+    }
+    return this.listDeadLetters(accountId, briefId);
+  }
+
+  async listDeadLetters(accountId: string, briefId: string): Promise<DeadLetterEntry[]> {
+    return structuredClone([...this.deadLetters.values()].filter((entry) => entry.accountId === accountId && entry.briefId === briefId));
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

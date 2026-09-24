@@ -1,5 +1,6 @@
 import type {
   CreateJobInput,
+  DeadLetterEntry,
   DeliveryAttempt,
   DeliveryJob,
   DeliveryRollout,
@@ -8,6 +9,9 @@ import type {
 } from "./job";
 
 export interface JobRepository {
+  setRetryBudget(accountId: string, budget: number): Promise<void>;
+  drainDeadLetters(accountId: string, briefId: string): Promise<DeadLetterEntry[]>;
+  listDeadLetters(accountId: string, briefId: string): Promise<DeadLetterEntry[]>;
   findById(jobId: string): Promise<JobRecord | null>;
   ensureIntent(input: CreateJobInput): Promise<JobRecord>;
   appendExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;

@@ -84,3 +84,18 @@ export type DeliveryDisplayStatus = JobStatus | "stuck";
 export type DeliveryDisplayRecord = Omit<JobRecord, "status"> & {
   status: DeliveryDisplayStatus;
 };
+
+export interface DeadLetterEntry {
+  deliveryJobId: string;
+  accountId: string;
+  briefId: string;
+  endpointUrl: string;
+  failedAttemptCount: number;
+  lastAttemptBodies: (string | null)[];
+  enqueuedAt: Date;
+}
+
+export interface DeadLetterSummary {
+  pastBudgetCount: number;
+  endpoints: DeadLetterEntry[];
+}

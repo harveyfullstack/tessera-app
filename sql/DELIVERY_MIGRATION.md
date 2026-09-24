@@ -87,3 +87,23 @@ transitions each receive a new event; supplied attempt numbers are ignored.
 Run `sql/verification/delivery_rpc.sql` in an empty disposable database to check
 both migrations and capture during rollback. Keep compatibility writes active
 for the entire 14-day rollback window; flipping the flag never stops capture.
+
+## Dead letter budget
+
+Apply `005_delivery_dlq.sql` after the status migration. Set per-account budgets
+in `delivery_retry_budgets`; absent rows use eight. The guarded append RPC
+rejects `running` once failed terminal events since the last queued replay or
+success reach that budget. Failed recording, legacy retry-count increment and
+SQL queue insertion share one transaction. The application uses the same
+exhaustion guard and runs its `drain_dlq` processor after recording failure.
+
+`delivery_dead_letters` references legacy `jobs`, allowing blocked accounts to
+retain DLQ entries. `drain_delivery_dlq(account, brief)` idempotently reconciles
+queue membership against current budgets. `delivery_dlq_summary` includes the
+failed delivery count and last three bodies, newest first. Explicit queued
+replay clears membership and resets the budget without deleting any event.
+
+Migration 005 replaces the original RPC in place, preserving trusted-worker
+EXECUTE grants. It does not expose an unguarded capture helper. Grant the drain
+function only to the trusted worker if using SQL processing. Verify all five
+migrations with `sql/verification/delivery_dlq.sql` in a disposable database.
