@@ -1,15 +1,24 @@
 import type {
   CreateJobInput,
+  DeadLetterEntry,
+  DeliveryAttempt,
+  DeliveryJob,
+  DeliveryRollout,
   JobRecord,
-  JobType,
   UpdateJobExecutionInput,
 } from "./job";
 
 export interface JobRepository {
-  findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]>;
+  setRetryBudget(accountId: string, budget: number): Promise<void>;
+  drainDeadLetters(accountId: string, briefId: string): Promise<DeadLetterEntry[]>;
+  listDeadLetters(accountId: string, briefId: string): Promise<DeadLetterEntry[]>;
   findById(jobId: string): Promise<JobRecord | null>;
-  create(input: CreateJobInput): Promise<JobRecord>;
-  updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;
-  incrementRetry(jobId: string): Promise<JobRecord>;
+  ensureIntent(input: CreateJobInput): Promise<JobRecord>;
+  appendExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;
   listByBrief(briefId: string): Promise<JobRecord[]>;
+  listAttempts(jobId: string): Promise<DeliveryAttempt[]>;
+  listLegacyAttempts(jobId: string): Promise<DeliveryAttempt[]>;
+  findIntent(jobId: string): Promise<DeliveryJob | null>;
+  getRollout(accountId: string): Promise<DeliveryRollout>;
+  setRollout(accountId: string, enabled: boolean): Promise<DeliveryRollout>;
 }

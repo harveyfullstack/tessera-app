@@ -1,54 +1,21 @@
-import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
+import { createHttpHandler } from "./handler";
 
-const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
-const delivery = new DeliveryOrchestrator(jobRecords);
-
-interface DeliverBody {
-  briefId: string;
-  customerId: string;
-  subscriptionId: string;
-  endpointUrl: string;
-  eventType: string;
-  payloadHash: string;
-  workerId: string;
-  simulateFailure?: boolean;
+const jobRecords = new JobRecordService(new InMemoryJobRepository());
+const budgets: unknown = JSON.parse(process.env.DELIVERY_RETRY_BUDGETS ?? "{}");
+if (!budgets || typeof budgets !== "object" || Array.isArray(budgets)) {
+  throw new Error("DELIVERY_RETRY_BUDGETS must be an account-to-budget JSON object");
 }
-
-const accountId = "tessera-demo-account";
+for (const [accountId, budget] of Object.entries(budgets)) {
+  if (typeof budget !== "number") throw new Error("Retry budgets must be numbers");
+  await jobRecords.setRetryBudget(accountId, budget);
+}
+for (const accountId of (process.env.DELIVERY_SPLIT_ACCOUNTS ?? "").split(",").map((value) => value.trim()).filter(Boolean)) {
+  await jobRecords.execution.setEnabled(accountId, true);
+}
 
 export const server = Bun.serve({
   port: Number(process.env.PORT ?? "8787"),
-  async fetch(req) {
-    const url = new URL(req.url);
-
-    if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
-      const [, briefs, briefId, jobs] = url.pathname.split("/");
-      if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
-      }
-    }
-
-    if (req.method === "POST" && url.pathname === "/deliver") {
-      const body = (await req.json()) as DeliverBody;
-      const result = await delivery.deliver({
-        accountId,
-        briefId: body.briefId,
-        customerId: body.customerId,
-        subscriptionId: body.subscriptionId,
-        endpointUrl: body.endpointUrl,
-        eventType: body.eventType,
-        payloadHash: body.payloadHash,
-        workerId: body.workerId,
-        simulateFailure: body.simulateFailure ?? false,
-      });
-
-      return Response.json({ job: result });
-    }
-
-    return new Response("Not found", { status: 404 });
-  },
+  fetch: createHttpHandler(jobRecords, "tessera-demo-account"),
 });
