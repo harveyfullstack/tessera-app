@@ -2,10 +2,11 @@ import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryDisplayRecord,
+  DeliveryDisplayStatus,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 
 export class JobRecordService {
@@ -50,8 +51,12 @@ export class JobRecordService {
     return this.execution.append(jobId, { status: "queued", incrementRetry: true });
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string, now = new Date()): Promise<DeliveryDisplayRecord[]> {
+    const jobs = await this.jobs.listByBrief(briefId);
+    return Promise.all(jobs.map(async (job) => ({
+      ...job,
+      status: await this.displayStatus(job.id, now),
+    })));
   }
 
   async ensureWebhookDispatchJob(
@@ -67,13 +72,12 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  displayStatus(jobId: string, now = new Date()): Promise<DeliveryDisplayStatus> {
+    return this.execution.displayStatus(jobId, now);
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  async canStartNewDelivery(jobId: string): Promise<boolean> {
+    const status = await this.displayStatus(jobId);
+    return status !== "running" && status !== "stuck";
   }
 }

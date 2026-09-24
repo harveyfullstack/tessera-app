@@ -26,3 +26,17 @@ bun install
 bun run check
 bun run dev
 ```
+
+## Webhook delivery history
+
+Execution transitions retain immutable history and a compatibility ledger even
+when the split is disabled. For the demo, opt accounts into derived delivery
+status at startup with `DELIVERY_SPLIT_ACCOUNTS=tessera-demo-account bun run dev`.
+The comma-separated account allowlist defaults empty; enabling uses the parity
+gate. Remove an account and restart to use its legacy status again. The demo
+repository is in-memory and resets on restart; SQL-backed rollout and rollback
+procedures are documented in `sql/DELIVERY_MIGRATION.md`.
+
+Enabled accounts display the highest-numbered execution event, or `queued` for
+empty history. A running event whose start is more than five minutes old displays
+`stuck`; it remains in flight until an explicit retry or terminal transition.

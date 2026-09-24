@@ -79,3 +79,8 @@ export interface DeliveryRollout {
   enabledAt?: Date | undefined;
   rollbackUntil?: Date | undefined;
 }
+
+export type DeliveryDisplayStatus = JobStatus | "stuck";
+export type DeliveryDisplayRecord = Omit<JobRecord, "status"> & {
+  status: DeliveryDisplayStatus;
+};

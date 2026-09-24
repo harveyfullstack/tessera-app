@@ -6,6 +6,10 @@ const jobRepository = new InMemoryJobRepository();
 const jobRecords = new JobRecordService(jobRepository);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
+for (const enabledAccount of (process.env.DELIVERY_SPLIT_ACCOUNTS ?? "").split(",").map((value) => value.trim()).filter(Boolean)) {
+  await jobRecords.execution.setEnabled(enabledAccount, true);
+}
+
 interface DeliverBody {
   briefId: string;
   customerId: string;
