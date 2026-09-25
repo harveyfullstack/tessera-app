@@ -1,9 +1,9 @@
 import type {
   CreateJobInput,
   DeliveryAttemptRecord,
+  DeliveryAttemptOperation,
   JobRecord,
   JobType,
-  UpdateJobExecutionInput,
 } from "./job";
 
 export interface JobRepository {
@@ -13,12 +13,7 @@ export interface JobRepository {
   ensureDlqEntry(
     input: CreateJobInput & { type: "drain_dlq"; parentJobId: string },
   ): Promise<JobRecord>;
-  updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;
-  incrementRetry(jobId: string): Promise<JobRecord>;
-  appendAttempt(
-    jobId: string,
-    attempt: Omit<DeliveryAttemptRecord, "jobId" | "attemptNumber" | "createdAt">,
-  ): Promise<DeliveryAttemptRecord>;
+  recordDeliveryAttempt(jobId: string, operation: DeliveryAttemptOperation): Promise<JobRecord>;
   listAttempts(jobId: string): Promise<DeliveryAttemptRecord[]>;
   listByBrief(briefId: string): Promise<JobRecord[]>;
 }

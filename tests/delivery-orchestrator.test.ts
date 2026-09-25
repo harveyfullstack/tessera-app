@@ -73,6 +73,8 @@ describe("DeliveryOrchestrator", () => {
       "dispatch_webhook",
     );
     expect(job).toBeDefined();
-    expect(await repository.listAttempts(job!.id)).toHaveLength(8);
+    const attempts = await repository.listAttempts(job!.id);
+    expect(attempts).toHaveLength(24);
+    expect(attempts.filter((attempt) => attempt.status === "failed")).toHaveLength(8);
   });
 });

@@ -61,9 +61,13 @@ export class DrainDlqProcessor {
       }
 
       const attempts = await this.jobs.listAttempts(record.id);
+      const terminalAttempts = attempts.filter(
+        (attempt) => attempt.status === "failed" || attempt.status === "completed",
+      );
       if (
-        attempts.length < this.retryBudgetFor(accountId) ||
-        !attempts.every((attempt) => attempt.status === "failed")
+        terminalAttempts.filter((attempt) => attempt.status === "failed").length <
+          this.retryBudgetFor(accountId) ||
+        terminalAttempts.some((attempt) => attempt.status !== "failed")
       ) {
         continue;
       }
@@ -123,6 +127,7 @@ export class DrainDlqProcessor {
 
       const attempts = await this.jobs.listAttempts(record.id);
       const attemptBodies = attempts
+        .filter((attempt) => attempt.status === "failed" || attempt.status === "completed")
         .slice(-3)
         .flatMap((attempt) => (attempt.errorBody === undefined ? [] : [attempt.errorBody]));
       dlqBodiesByJob.set(record.id, attemptBodies);

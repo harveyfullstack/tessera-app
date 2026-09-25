@@ -4,13 +4,26 @@ import {
   DrainDlqProcessor,
   parseAccountRetryBudgets,
 } from "../application/drain-dlq-processor";
+import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { JobRecordService } from "../application/job-record-service";
-import { JobDeadLetteredError } from "../domain/errors";
+import {
+  DeliveryRollbackUnavailableError,
+  JobDeadLetteredError,
+} from "../domain/errors";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 import type { JobRecord } from "../domain/job";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const rollbackAccounts = new Set(
+  (process.env.WEBHOOK_DELIVERY_ROLLBACK_ACCOUNTS ?? "")
+    .split(",")
+    .map((accountId) => accountId.trim())
+    .filter(Boolean),
+);
+const jobRecords = new JobRecordService(
+  jobRepository,
+  new DeliveryAttemptRpc(jobRepository, (accountId) => rollbackAccounts.has(accountId)),
+);
 const dlqProcessor = new DrainDlqProcessor(jobRecords, {
   perAccount: parseAccountRetryBudgets(process.env.WEBHOOK_RETRY_BUDGETS),
 });
@@ -78,6 +91,9 @@ export const server = Bun.serve({
       } catch (error) {
         if (error instanceof JobDeadLetteredError) {
           return Response.json({ error: error.message }, { status: 409 });
+        }
+        if (error instanceof DeliveryRollbackUnavailableError) {
+          return Response.json({ error: error.message }, { status: 503 });
         }
         throw error;
       }

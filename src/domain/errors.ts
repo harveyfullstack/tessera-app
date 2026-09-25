@@ -15,3 +15,9 @@ export class JobDeadLetteredError extends Error {
     super(`Delivery is in the dead letter queue: ${jobId}`);
   }
 }
+
+export class DeliveryRollbackUnavailableError extends Error {
+  constructor(accountId: string) {
+    super(`Rollback is unavailable for account: ${accountId}`);
+  }
+}
