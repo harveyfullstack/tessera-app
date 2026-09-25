@@ -26,3 +26,12 @@ bun install
 bun run check
 bun run dev
 ```
+
+Webhook delivery moves an endpoint to the dead letter queue after eight failed
+attempts by default. Set `WEBHOOK_RETRY_BUDGETS` to a JSON object keyed by
+account ID to override the limit, for example `{"account-1":12}`. The
+`GET /briefs/:briefId/jobs` endpoint includes DLQ summary and attempt-body
+details; add `?status=dlq` to return only dead-lettered endpoints. Configure
+`WEBHOOK_ADMIN_TOKEN` and send it as a bearer token in the `Authorization`
+header to access this endpoint. It fails closed with `503` when the token is
+not configured and returns `401` for missing or invalid credentials.

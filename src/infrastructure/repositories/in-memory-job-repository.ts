@@ -3,6 +3,7 @@ import { JobNotFoundError } from "../../domain/errors";
 import type { JobRepository } from "../../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -10,6 +11,7 @@ import type {
 
 export class InMemoryJobRepository implements JobRepository {
   private readonly jobs = new Map<string, JobRecord>();
+  private readonly attempts = new Map<string, DeliveryAttemptRecord[]>();
 
   async findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]> {
     return [...this.jobs.values()]
@@ -39,6 +41,18 @@ export class InMemoryJobRepository implements JobRepository {
 
     this.jobs.set(job.id, job);
     return job;
+  }
+
+  async ensureDlqEntry(
+    input: CreateJobInput & { type: "drain_dlq"; parentJobId: string },
+  ): Promise<JobRecord> {
+    const existing = [...this.jobs.values()].find(
+      (job) =>
+        job.type === "drain_dlq" &&
+        job.parentJobId === input.parentJobId &&
+        job.accountId === input.accountId,
+    );
+    return existing ?? this.create(input);
   }
 
   async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
@@ -79,6 +93,29 @@ export class InMemoryJobRepository implements JobRepository {
 
     this.jobs.set(jobId, updated);
     return updated;
+  }
+
+  async appendAttempt(
+    jobId: string,
+    attempt: Omit<DeliveryAttemptRecord, "jobId" | "attemptNumber" | "createdAt">,
+  ): Promise<DeliveryAttemptRecord> {
+    if (!this.jobs.has(jobId)) {
+      throw new JobNotFoundError(jobId);
+    }
+
+    const existing = this.attempts.get(jobId) ?? [];
+    const record: DeliveryAttemptRecord = {
+      ...attempt,
+      jobId,
+      attemptNumber: existing.length + 1,
+      createdAt: new Date(),
+    };
+    this.attempts.set(jobId, [...existing, record]);
+    return record;
+  }
+
+  async listAttempts(jobId: string): Promise<DeliveryAttemptRecord[]> {
+    return [...(this.attempts.get(jobId) ?? [])];
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

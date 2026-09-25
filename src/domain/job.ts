@@ -23,6 +23,17 @@ export interface JobExecutionDetails {
   errorBody?: string | undefined;
 }
 
+export interface DeliveryAttemptRecord {
+  jobId: string;
+  attemptNumber: number;
+  status: "completed" | "failed";
+  workerId?: string | undefined;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  createdAt: Date;
+}
+
 export interface JobRecord {
   id: string;
   accountId: string;

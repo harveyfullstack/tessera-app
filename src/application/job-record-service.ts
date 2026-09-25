@@ -2,6 +2,7 @@ import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
@@ -45,11 +46,19 @@ export class JobRecordService {
       throw new JobNotFoundError(jobId);
     }
 
-    return this.jobs.updateExecution(jobId, {
+    const job = await this.jobs.updateExecution(jobId, {
       status: "failed",
       errorMessage,
       details,
     });
+    await this.jobs.appendAttempt(jobId, {
+      status: "failed",
+      workerId: details?.workerId,
+      responseStatus: details?.responseStatus,
+      responseLatencyMs: details?.responseLatencyMs,
+      errorBody: details?.errorBody,
+    });
+    return job;
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
@@ -58,10 +67,18 @@ export class JobRecordService {
       throw new JobNotFoundError(jobId);
     }
 
-    return this.jobs.updateExecution(jobId, {
+    const job = await this.jobs.updateExecution(jobId, {
       status: "completed",
       details,
     });
+    await this.jobs.appendAttempt(jobId, {
+      status: "completed",
+      workerId: details.workerId,
+      responseStatus: details.responseStatus,
+      responseLatencyMs: details.responseLatencyMs,
+      errorBody: details.errorBody,
+    });
+    return job;
   }
 
   async retry(jobId: string): Promise<JobRecord> {
@@ -75,6 +92,16 @@ export class JobRecordService {
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return this.jobs.listByBrief(briefId);
+  }
+
+  async ensureDlqEntry(
+    input: CreateJobInput & { type: "drain_dlq"; parentJobId: string },
+  ): Promise<JobRecord> {
+    return this.jobs.ensureDlqEntry(input);
+  }
+
+  async listAttempts(jobId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.jobs.listAttempts(jobId);
   }
 
   async ensureWebhookDispatchJob(

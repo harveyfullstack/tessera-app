@@ -4,6 +4,7 @@ import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-mem
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -67,6 +68,7 @@ describe("JobRecordService", () => {
 
 class RacyJobRepository implements JobRepository {
   private jobs = new Map<string, JobRecord>();
+  private attempts = new Map<string, DeliveryAttemptRecord[]>();
   created: JobRecord[] = [];
 
   async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
@@ -100,6 +102,15 @@ class RacyJobRepository implements JobRepository {
     return record;
   }
 
+  async ensureDlqEntry(
+    input: CreateJobInput & { type: "drain_dlq"; parentJobId: string },
+  ): Promise<JobRecord> {
+    const existing = [...this.jobs.values()].find(
+      (job) => job.type === "drain_dlq" && job.parentJobId === input.parentJobId,
+    );
+    return existing ?? this.create(input);
+  }
+
   async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
     const existing = await this.findById(jobId);
     if (!existing) {
@@ -131,6 +142,25 @@ class RacyJobRepository implements JobRepository {
     };
     this.jobs.set(jobId, updated);
     return updated;
+  }
+
+  async appendAttempt(
+    jobId: string,
+    attempt: Omit<DeliveryAttemptRecord, "jobId" | "attemptNumber" | "createdAt">,
+  ): Promise<DeliveryAttemptRecord> {
+    const records = this.attempts.get(jobId) ?? [];
+    const record: DeliveryAttemptRecord = {
+      ...attempt,
+      jobId,
+      attemptNumber: records.length + 1,
+      createdAt: new Date(),
+    };
+    this.attempts.set(jobId, [...records, record]);
+    return record;
+  }
+
+  async listAttempts(jobId: string): Promise<DeliveryAttemptRecord[]> {
+    return [...(this.attempts.get(jobId) ?? [])];
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
