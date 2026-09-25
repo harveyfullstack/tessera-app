@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
+import { DeliveryRollbackUnavailableError } from "../src/domain/errors";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobRecord,
   JobType,
-  UpdateJobExecutionInput,
 } from "../src/domain/job";
 
 const baseInput: CreateJobInput = {
@@ -33,7 +35,7 @@ describe("JobRecordService", () => {
     expect(second.id).toBe(first.id);
   });
 
-  test("mutates the same row across retries and overwrites terminal execution details", async () => {
+  test("records each RPC operation with an operation-specific status", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo);
 
@@ -46,9 +48,109 @@ describe("JobRecordService", () => {
 
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
     expect(final.errorMessage).toBeUndefined();
+    expect(await repo.listAttempts(job.id)).toMatchObject([
+      { attemptNumber: 1, status: "running" },
+      { attemptNumber: 2, status: "failed" },
+      { attemptNumber: 3, status: "retry" },
+      { attemptNumber: 4, status: "running" },
+    ]);
+  });
+
+  test("derives display status from the attempt with the highest attempt number", async () => {
+    const repo = new DisplayStatusRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    const now = new Date();
+
+    repo.displayAttempts = [
+      { jobId: job.id, attemptNumber: 3, status: "failed", createdAt: now },
+      { jobId: job.id, attemptNumber: 2, status: "running", createdAt: now },
+    ];
+
+    expect(await service.displayStatus(job)).toBe("failed");
+  });
+
+  test("returns queued when a job has no delivery attempts", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("marks a running attempt stuck only after five minutes", async () => {
+    const repo = new DisplayStatusRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    const now = Date.now();
+    repo.displayAttempts = [
+      {
+        jobId: job.id,
+        attemptNumber: 1,
+        status: "running",
+        createdAt: new Date(now - 5 * 60 * 1000 - 1),
+      },
+    ];
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+
+    repo.displayAttempts = [
+      {
+        jobId: job.id,
+        attemptNumber: 2,
+        status: "running",
+        createdAt: new Date(Date.now() - 5 * 60 * 1000),
+      },
+    ];
+    expect(await service.displayStatus(job)).toBe("running");
+  });
+
+  test("uses the legacy job status when rollback is enabled", async () => {
+    const repo = new InMemoryJobRepository();
+    const rpc = new DeliveryAttemptRpc(repo, (accountId) => accountId === "acct-1");
+    const service = new JobRecordService(repo, rpc);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus({ ...job, status: "completed" })).toBe("completed");
+  });
+
+  test("assigns attempt numbers monotonically when terminal writes race", async () => {
+    const repo = new InMemoryJobRepository();
+    const firstService = new JobRecordService(repo, new DeliveryAttemptRpc(repo));
+    const secondService = new JobRecordService(repo, new DeliveryAttemptRpc(repo));
+    const job = await firstService.ensureJobRecord(baseInput);
+
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        (index % 2 === 0 ? firstService : secondService).markFailed(
+          job.id,
+          `failure-${index}`,
+        ),
+      ),
+    );
+
+    expect((await repo.listAttempts(job.id)).map((attempt) => attempt.attemptNumber)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+  });
+
+  test("fails closed when rollback is enabled without a legacy repository", async () => {
+    const repo = new InMemoryJobRepository();
+    const checkedAccounts: string[] = [];
+    const rpc = new DeliveryAttemptRpc(repo, (accountId) => {
+      checkedAccounts.push(accountId);
+      return accountId === "acct-1";
+    });
+    const service = new JobRecordService(repo, rpc);
+    const job = await service.ensureJobRecord(baseInput);
+
+    await expect(service.markRunning(job.id, "worker-us-east-04")).rejects.toBeInstanceOf(
+      DeliveryRollbackUnavailableError,
+    );
+
+    expect(checkedAccounts).toEqual(["acct-1"]);
+    expect(await repo.listAttempts(job.id)).toEqual([]);
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
@@ -65,8 +167,7 @@ describe("JobRecordService", () => {
   });
 });
 
-class RacyJobRepository implements JobRepository {
-  private jobs = new Map<string, JobRecord>();
+class RacyJobRepository extends InMemoryJobRepository implements JobRepository {
   created: JobRecord[] = [];
 
   async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
@@ -74,66 +175,17 @@ class RacyJobRepository implements JobRepository {
     return [];
   }
 
-  async findById(jobId: string): Promise<JobRecord | null> {
-    return this.jobs.get(jobId) ?? null;
-  }
-
   async create(input: CreateJobInput): Promise<JobRecord> {
-    const now = new Date();
-    const id = crypto.randomUUID();
-    const record: JobRecord = {
-      id,
-      accountId: input.accountId,
-      briefId: input.briefId,
-      taskId: input.taskId,
-      parentJobId: input.parentJobId,
-      type: input.type,
-      metadata: input.metadata,
-      status: "queued",
-      retryCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.jobs.set(id, record);
+    const record = await super.create(input);
     this.created.push(record);
     return record;
   }
+}
 
-  async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
+class DisplayStatusRepository extends InMemoryJobRepository {
+  displayAttempts: DeliveryAttemptRecord[] = [];
 
-    const updated: JobRecord = {
-      ...existing,
-      status: input.status,
-      workerId: input.workerId,
-      errorMessage: input.errorMessage,
-      updatedAt: new Date(),
-    };
-
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async incrementRetry(jobId: string): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      retryCount: existing.retryCount + 1,
-      updatedAt: new Date(),
-    };
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return [...this.jobs.values()].filter((job) => job.briefId === briefId);
+  async listAttempts(_jobId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.displayAttempts;
   }
 }

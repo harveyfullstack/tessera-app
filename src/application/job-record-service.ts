@@ -1,15 +1,23 @@
-import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttemptRecord,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  private static readonly stuckAttemptThresholdMs = 5 * 60 * 1000;
+  private readonly deliveryAttempts: DeliveryAttemptRpc;
+
+  constructor(
+    private readonly jobs: JobRepository,
+    deliveryAttempts?: DeliveryAttemptRpc,
+  ) {
+    this.deliveryAttempts = deliveryAttempts ?? new DeliveryAttemptRpc(jobs);
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -23,16 +31,7 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.deliveryAttempts.markRunning(jobId, workerId);
   }
 
   async markFailed(
@@ -40,41 +39,29 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.deliveryAttempts.markFailed(jobId, errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.deliveryAttempts.markCompleted(jobId, details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.deliveryAttempts.retry(jobId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return this.jobs.listByBrief(briefId);
+  }
+
+  async ensureDlqEntry(
+    input: CreateJobInput & { type: "drain_dlq"; parentJobId: string },
+  ): Promise<JobRecord> {
+    return this.jobs.ensureDlqEntry(input);
+  }
+
+  async listAttempts(jobId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.jobs.listAttempts(jobId);
   }
 
   async ensureWebhookDispatchJob(
@@ -90,13 +77,34 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.deliveryAttempts.isRollbackEnabledFor(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    const attempts = await this.jobs.listAttempts(job.id);
+    const latestAttempt = attempts.reduce<DeliveryAttemptRecord | undefined>(
+      (latest, attempt) =>
+        !latest || attempt.attemptNumber > latest.attemptNumber ? attempt : latest,
+      undefined,
+    );
+
+    if (!latestAttempt) {
+      return "queued";
+    }
+
+    if (
+      latestAttempt.status === "running" &&
+      Date.now() - latestAttempt.createdAt.getTime() > JobRecordService.stuckAttemptThresholdMs
+    ) {
+      return "stuck";
+    }
+
+    return latestAttempt.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
 }
