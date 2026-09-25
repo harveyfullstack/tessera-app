@@ -6,6 +6,7 @@ import {
 } from "../src/application/drain-dlq-processor";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
+import type { JobRecord } from "../src/domain/job";
 
 const endpoint = {
   accountId: "acct-default",
@@ -71,6 +72,16 @@ describe("DrainDlqProcessor", () => {
     expect((await processor.listByBrief("acct-unknown", endpoint.briefId)).jobs).toHaveLength(0);
   });
 
+  test("uses the derived attempt status in the brief jobs response", async () => {
+    const service = new FixedStatusJobRecordService(new InMemoryJobRepository());
+    await service.ensureJobRecord(endpoint);
+    const processor = new DrainDlqProcessor(service);
+
+    const view = await processor.listByBrief(endpoint.accountId, endpoint.briefId);
+
+    expect(view.jobs[0]?.status).toBe("stuck");
+  });
+
   test("parses per-account retry budget configuration", () => {
     expect(parseAccountRetryBudgets('{"acct-1":12}')).toEqual({ "acct-1": 12 });
     expect(parseAccountRetryBudgets(undefined)).toEqual({});
@@ -88,5 +99,11 @@ async function failAttempts(
       responseStatus: 503,
       errorBody: `failure-body-${attempt}`,
     });
+  }
+}
+
+class FixedStatusJobRecordService extends JobRecordService {
+  async displayStatus(_job: JobRecord): Promise<string> {
+    return "stuck";
   }
 }

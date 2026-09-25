@@ -4,7 +4,12 @@ import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import { DeliveryRollbackUnavailableError } from "../src/domain/errors";
 import type { JobRepository } from "../src/domain/job-repository";
-import type { CreateJobInput, JobRecord, JobType } from "../src/domain/job";
+import type {
+  CreateJobInput,
+  DeliveryAttemptRecord,
+  JobRecord,
+  JobType,
+} from "../src/domain/job";
 
 const baseInput: CreateJobInput = {
   accountId: "acct-1",
@@ -50,6 +55,64 @@ describe("JobRecordService", () => {
       { attemptNumber: 3, status: "retry" },
       { attemptNumber: 4, status: "running" },
     ]);
+  });
+
+  test("derives display status from the attempt with the highest attempt number", async () => {
+    const repo = new DisplayStatusRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    const now = new Date();
+
+    repo.displayAttempts = [
+      { jobId: job.id, attemptNumber: 3, status: "failed", createdAt: now },
+      { jobId: job.id, attemptNumber: 2, status: "running", createdAt: now },
+    ];
+
+    expect(await service.displayStatus(job)).toBe("failed");
+  });
+
+  test("returns queued when a job has no delivery attempts", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("marks a running attempt stuck only after five minutes", async () => {
+    const repo = new DisplayStatusRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    const now = Date.now();
+    repo.displayAttempts = [
+      {
+        jobId: job.id,
+        attemptNumber: 1,
+        status: "running",
+        createdAt: new Date(now - 5 * 60 * 1000 - 1),
+      },
+    ];
+
+    expect(await service.displayStatus(job)).toBe("stuck");
+
+    repo.displayAttempts = [
+      {
+        jobId: job.id,
+        attemptNumber: 2,
+        status: "running",
+        createdAt: new Date(Date.now() - 5 * 60 * 1000),
+      },
+    ];
+    expect(await service.displayStatus(job)).toBe("running");
+  });
+
+  test("uses the legacy job status when rollback is enabled", async () => {
+    const repo = new InMemoryJobRepository();
+    const rpc = new DeliveryAttemptRpc(repo, (accountId) => accountId === "acct-1");
+    const service = new JobRecordService(repo, rpc);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus({ ...job, status: "completed" })).toBe("completed");
   });
 
   test("assigns attempt numbers monotonically when terminal writes race", async () => {
@@ -116,5 +179,13 @@ class RacyJobRepository extends InMemoryJobRepository implements JobRepository {
     const record = await super.create(input);
     this.created.push(record);
     return record;
+  }
+}
+
+class DisplayStatusRepository extends InMemoryJobRepository {
+  displayAttempts: DeliveryAttemptRecord[] = [];
+
+  async listAttempts(_jobId: string): Promise<DeliveryAttemptRecord[]> {
+    return this.displayAttempts;
   }
 }

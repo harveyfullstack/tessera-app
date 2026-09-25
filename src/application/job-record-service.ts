@@ -5,11 +5,11 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
 export class JobRecordService {
+  private static readonly stuckAttemptThresholdMs = 5 * 60 * 1000;
   private readonly deliveryAttempts: DeliveryAttemptRpc;
 
   constructor(
@@ -77,13 +77,34 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.deliveryAttempts.isRollbackEnabledFor(job.accountId)) {
+      return job.status ?? "queued";
+    }
+
+    const attempts = await this.jobs.listAttempts(job.id);
+    const latestAttempt = attempts.reduce<DeliveryAttemptRecord | undefined>(
+      (latest, attempt) =>
+        !latest || attempt.attemptNumber > latest.attemptNumber ? attempt : latest,
+      undefined,
+    );
+
+    if (!latestAttempt) {
+      return "queued";
+    }
+
+    if (
+      latestAttempt.status === "running" &&
+      Date.now() - latestAttempt.createdAt.getTime() > JobRecordService.stuckAttemptThresholdMs
+    ) {
+      return "stuck";
+    }
+
+    return latestAttempt.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
 }

@@ -1,4 +1,4 @@
-import type { JobRecord, JobStatus } from "../domain/job";
+import type { JobRecord } from "../domain/job";
 import { JobRecordService } from "./job-record-service";
 
 export const DEFAULT_RETRY_BUDGET = 8;
@@ -15,7 +15,7 @@ export interface DlqEndpoint {
 }
 
 export interface DlqJobView extends Omit<JobRecord, "status"> {
-  status: JobStatus | "dlq";
+  status: string;
   dlq: { attemptBodies: string[] } | null;
 }
 
@@ -138,15 +138,21 @@ export class DrainDlqProcessor {
       });
     }
 
-    const jobs = records
-      .map((record): DlqJobView => {
+    const jobs = await Promise.all(
+      records.map(async (record): Promise<DlqJobView> => {
         const attemptBodies = dlqBodiesByJob.get(record.id);
         return {
           ...record,
-          status: attemptBodies === undefined ? record.status : "dlq",
+          status:
+            attemptBodies === undefined
+              ? await this.jobs.displayStatus(record)
+              : "dlq",
           dlq: attemptBodies === undefined ? null : { attemptBodies },
         };
-      })
+      }),
+    );
+
+    const filteredJobs = jobs
       .filter((record) => {
         if (!statusFilter) {
           return true;
@@ -155,7 +161,7 @@ export class DrainDlqProcessor {
       });
 
     return {
-      jobs,
+      jobs: filteredJobs,
       dlq: {
         pastBudgetCount: endpoints.length,
         endpoints,

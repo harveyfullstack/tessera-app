@@ -17,6 +17,10 @@ export class DeliveryAttemptRpc {
     private readonly isRollbackEnabled: DeliveryRollbackFeatureFlag = () => false,
   ) {}
 
+  isRollbackEnabledFor(accountId: string): boolean {
+    return this.isRollbackEnabled(accountId);
+  }
+
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
     const { job } = await this.loadJob(jobId);
     return this.record(job, { type: "mark_running", workerId });
@@ -49,7 +53,7 @@ export class DeliveryAttemptRpc {
       throw new JobNotFoundError(jobId);
     }
 
-    if (this.isRollbackEnabled(job.accountId)) {
+    if (this.isRollbackEnabledFor(job.accountId)) {
       throw new DeliveryRollbackUnavailableError(job.accountId);
     }
     return { job };
