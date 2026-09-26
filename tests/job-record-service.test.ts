@@ -80,6 +80,42 @@ describe("JobRecordService", () => {
 
     expect(updated.status).toBe("running");
     expect(await attempts.listByJobId(job.id)).toEqual([]);
+    expect(await service.displayStatus(updated)).toBe("running");
+  });
+
+  test("displays queued when there are no attempts outside rollback mode", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = createService(repo).service;
+    const job = await service.ensureJobRecord(baseInput);
+    const completedJob = await repo.updateExecution(job.id, {
+      status: "completed",
+    });
+
+    expect(await service.displayStatus(completedJob)).toBe("queued");
+  });
+
+  test("displays the latest attempt status", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = createService(repo).service;
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+
+    expect(await service.displayStatus(job)).toBe("running");
+  });
+
+  test("displays stuck for a running attempt older than five minutes", async () => {
+    const repo = new InMemoryJobRepository();
+    const { service, attempts } = createService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    await attempts.insert({
+      deliveryJobId: job.id,
+      attemptNumber: 1,
+      status: "running",
+      startedAt: new Date(Date.now() - 5 * 60 * 1000 - 1),
+    });
+
+    expect(await service.displayStatus(job)).toBe("stuck");
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {

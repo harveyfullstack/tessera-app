@@ -14,6 +14,8 @@ import type {
 
 export type RollbackFeatureFlag = (accountId: string) => boolean;
 
+const STUCK_AFTER_MS = 5 * 60 * 1000;
+
 type DeliveryAttemptCommand =
   | { type: "execution"; input: UpdateJobExecutionInput }
   | { type: "retry" };
@@ -70,6 +72,41 @@ export class DeliveryAttemptRpc {
     }
 
     return this.projectJob(job, await this.attempts.listByJobId(jobId));
+  }
+
+  async getDisplayStatus(jobId: string): Promise<JobStatus | "stuck"> {
+    const job = await this.jobs.findById(jobId);
+    if (!job) {
+      throw new JobNotFoundError(jobId);
+    }
+
+    if (this.rollbackEnabled(job.accountId)) {
+      return job.status;
+    }
+
+    const latest = (await this.attempts.listByJobId(jobId)).reduce<
+      DeliveryAttempt | undefined
+    >(
+      (current, attempt) =>
+        !current || attempt.attemptNumber > current.attemptNumber
+          ? attempt
+          : current,
+      undefined,
+    );
+
+    if (!latest) {
+      return "queued";
+    }
+
+    if (
+      latest.status === "running" &&
+      latest.startedAt &&
+      Date.now() - latest.startedAt.getTime() > STUCK_AFTER_MS
+    ) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 
   private async write(
