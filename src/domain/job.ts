@@ -56,6 +56,14 @@ export interface DeliveryAttempt {
   completedAt?: Date | undefined;
 }
 
+export interface DlqEntry {
+  jobId: string;
+  accountId: string;
+  briefId: string;
+  endpointUrl: string;
+  attemptBodies: string[];
+}
+
 export interface CreateJobInput {
   accountId: string;
   briefId: string;

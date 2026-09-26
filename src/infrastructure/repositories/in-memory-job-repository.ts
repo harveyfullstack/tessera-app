@@ -4,6 +4,7 @@ import type { JobRepository } from "../../domain/job-repository";
 import type {
   CreateJobInput,
   DeliveryAttempt,
+  DlqEntry,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -12,6 +13,7 @@ import type {
 export class InMemoryJobRepository implements JobRepository {
   private readonly jobs = new Map<string, JobRecord>();
   private readonly attempts = new Map<string, DeliveryAttempt[]>();
+  private readonly dlq = new Map<string, DlqEntry>();
 
   async findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]> {
     return [...this.jobs.values()]
@@ -24,6 +26,11 @@ export class InMemoryJobRepository implements JobRepository {
   }
 
   async create(input: CreateJobInput): Promise<JobRecord> {
+    // Synchronous uniqueness check + insert prevents racing callers from
+    // producing two intent rows in the in-memory runtime.
+    const existing = [...this.jobs.values()].find((job) =>
+      job.accountId === input.accountId && job.briefId === input.briefId && job.type === input.type);
+    if (existing) return existing;
     const now = new Date();
     const job: JobRecord = {
       id: randomUUID(),
@@ -109,6 +116,14 @@ export class InMemoryJobRepository implements JobRepository {
 
   async listAttempts(jobId: string): Promise<DeliveryAttempt[]> {
     return [...(this.attempts.get(jobId) ?? [])];
+  }
+
+  async enqueueDlq(entry: DlqEntry): Promise<void> {
+    this.dlq.set(entry.jobId, entry);
+  }
+
+  async listDlq(briefId: string): Promise<DlqEntry[]> {
+    return [...this.dlq.values()].filter((entry) => entry.briefId === briefId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

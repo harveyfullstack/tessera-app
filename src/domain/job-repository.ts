@@ -1,6 +1,7 @@
 import type {
   CreateJobInput,
   DeliveryAttempt,
+  DlqEntry,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -14,5 +15,7 @@ export interface JobRepository {
   incrementRetry(jobId: string): Promise<JobRecord>;
   appendAttempt(jobId: string, input: UpdateJobExecutionInput): Promise<DeliveryAttempt>;
   listAttempts(jobId: string): Promise<DeliveryAttempt[]>;
+  enqueueDlq(entry: DlqEntry): Promise<void>;
+  listDlq(briefId: string): Promise<DlqEntry[]>;
   listByBrief(briefId: string): Promise<JobRecord[]>;
 }

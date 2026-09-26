@@ -1,14 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
-import type { JobRepository } from "../src/domain/job-repository";
-import type {
-  CreateJobInput,
-  DeliveryAttempt,
-  JobRecord,
-  JobType,
-  UpdateJobExecutionInput,
-} from "../src/domain/job";
+import type { CreateJobInput } from "../src/domain/job";
 
 const baseInput: CreateJobInput = {
   accountId: "acct-1",
@@ -86,97 +79,13 @@ describe("JobRecordService", () => {
     expect(await service.displayStatus((await repo.findById(job.id))!)).toBe("running");
   });
 
-  test("can produce duplicate intent rows under race conditions", async () => {
-    const repo = new RacyJobRepository();
+  test("prevents duplicate intent rows under concurrent creation", async () => {
+    const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo);
-
     const [a, b] = await Promise.all([
-      service.ensureJobRecord(baseInput),
-      service.ensureJobRecord(baseInput),
+      service.ensureJobRecord(baseInput), service.ensureJobRecord(baseInput),
     ]);
-
-    expect(a.id).not.toBe(b.id);
-    expect(repo.created.length).toBe(2);
+    expect(a.id).toBe(b.id);
+    expect((await repo.findByBriefAndType(baseInput.briefId, baseInput.type)).length).toBe(1);
   });
 });
-
-class RacyJobRepository implements JobRepository {
-  private jobs = new Map<string, JobRecord>();
-  created: JobRecord[] = [];
-
-  async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
-    // Stale read window where concurrent callers both observe no row.
-    return [];
-  }
-
-  async findById(jobId: string): Promise<JobRecord | null> {
-    return this.jobs.get(jobId) ?? null;
-  }
-
-  async create(input: CreateJobInput): Promise<JobRecord> {
-    const now = new Date();
-    const id = crypto.randomUUID();
-    const record: JobRecord = {
-      id,
-      accountId: input.accountId,
-      briefId: input.briefId,
-      taskId: input.taskId,
-      parentJobId: input.parentJobId,
-      type: input.type,
-      metadata: input.metadata,
-      status: "queued",
-      retryCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.jobs.set(id, record);
-    this.created.push(record);
-    return record;
-  }
-
-  async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      status: input.status,
-      workerId: input.workerId,
-      errorMessage: input.errorMessage,
-      updatedAt: new Date(),
-    };
-
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async incrementRetry(jobId: string): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      retryCount: existing.retryCount + 1,
-      updatedAt: new Date(),
-    };
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async appendAttempt(_jobId: string, _input: UpdateJobExecutionInput): Promise<DeliveryAttempt> {
-    throw new Error("not used in race test");
-  }
-
-  async listAttempts(_jobId: string): Promise<DeliveryAttempt[]> {
-    return [];
-  }
-
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return [...this.jobs.values()].filter((job) => job.briefId === briefId);
-  }
-}

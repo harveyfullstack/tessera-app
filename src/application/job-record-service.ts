@@ -19,12 +19,12 @@ export class JobRecordService {
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
-    const canonical = existing[0];
+    const canonical = existing.find((job) => job.accountId === input.accountId);
     if (canonical) {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // The repository enforces the unique account/brief/type key atomically.
     return this.jobs.create(input);
   }
 
