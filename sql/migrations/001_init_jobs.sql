@@ -27,6 +27,6 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_account_brief_idx ON jobs (account_id, brief_id);
 CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);
 
--- Intentionally no unique constraint on (brief_id, type) yet. Duplicate intent
--- rows surface during retry races. The follow-up brief adds the constraint
--- and routes all execution writes through an RPC boundary.
+-- Intentionally no unique constraint yet. Duplicate intent rows surface
+-- during retry races. The follow-up brief adds endpoint-specific identity and
+-- routes all execution writes through an RPC boundary.

@@ -7,17 +7,29 @@ BEGIN
   IF EXISTS (SELECT 1 FROM jobs WHERE retry_count < 0) THEN
     RAISE EXCEPTION 'Cannot split jobs: retry_count cannot be negative';
   END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jobs
+    WHERE jsonb_typeof(metadata -> 'endpointUrl') IS DISTINCT FROM 'string'
+  ) THEN
+    RAISE EXCEPTION 'Cannot split jobs: every delivery must have a string metadata.endpointUrl';
+  END IF;
 END;
 $$;
 
 -- Keep the earliest row as the immutable intent for each delivery. Duplicate
--- legacy rows are retained in the mapping so their execution history is not
--- discarded during the split.
+-- legacy rows for the same exact endpoint are retained in the mapping so
+-- their execution history is not discarded during the split.
 CREATE TEMP TABLE legacy_delivery_job_map ON COMMIT DROP AS
 SELECT
   j.id AS legacy_job_id,
   FIRST_VALUE(j.id) OVER (
-    PARTITION BY j.account_id, j.brief_id, j.type
+    PARTITION BY
+      j.account_id,
+      j.brief_id,
+      j.type,
+      (j.metadata ->> 'endpointUrl') COLLATE "C"
     ORDER BY j.created_at ASC, j.id ASC
   ) AS delivery_job_id
 FROM jobs AS j;
@@ -32,6 +44,8 @@ SELECT
       AND j.started_at IS NULL
       AND j.completed_at IS NULL
       THEN j.retry_count
+    WHEN j.status = 'failed'
+      THEN GREATEST(j.retry_count, 1)
     ELSE j.retry_count + 1
   END AS expected_attempt_count
 FROM jobs AS j
@@ -63,9 +77,21 @@ CREATE TABLE delivery_jobs (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT delivery_jobs_account_brief_type_key
-    UNIQUE (account_id, brief_id, type)
+  CONSTRAINT delivery_jobs_endpoint_url_string
+    CHECK (
+      jsonb_typeof(metadata -> 'endpointUrl') IS NOT DISTINCT FROM 'string'
+    )
 );
+
+-- The approved endpoint identity keeps URLs exact: no case, slash, or other
+-- normalization is applied, and C collation preserves bytewise string equality.
+CREATE UNIQUE INDEX delivery_jobs_account_brief_type_endpoint_key
+  ON delivery_jobs (
+    account_id,
+    brief_id,
+    type,
+    ((metadata ->> 'endpointUrl') COLLATE "C")
+  );
 
 CREATE INDEX delivery_jobs_account_brief_idx
   ON delivery_jobs (account_id, brief_id);

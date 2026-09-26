@@ -17,6 +17,20 @@ Webhook delivery uses append-only attempts by default. Set
 `WEBHOOK_DELIVERY_ROLLBACK_ACCOUNT_IDS` to a comma-separated list of account IDs
 to route those accounts through the legacy job-write path.
 
+Delivery job identity is `(account_id, brief_id, type, metadata.endpointUrl)`.
+The endpoint URL is compared exactly as supplied; it is not normalized, so
+different casing or trailing slashes identify different delivery endpoints.
+This is an approved deviation from the brief's originally planned
+`(account_id, brief_id, type)` key, which would collapse separate webhook
+endpoints for the same brief and type.
+
+The retry budget defaults to 8 failed delivery attempts per endpoint. Configure
+account-specific budgets with `WEBHOOK_DELIVERY_RETRY_BUDGETS`, a comma-separated
+list of `account-id=attempt-count` entries (for example,
+`acct-a=8,acct-b=12`). The jobs API derives its DLQ view from delivery-attempt
+history and includes the last three attempt bodies for each endpoint; no
+separate runtime persistence is introduced.
+
 ## Mobile SDK startup contract
 
 The mobile SDK uses a four-entry startup buffer and preserves event order through initialization. A failed flush retains undelivered events without replaying successful deliveries. LTE flush behavior and ProGuard configuration are separate from startup buffering.

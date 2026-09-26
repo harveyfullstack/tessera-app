@@ -15,14 +15,8 @@ export class JobRecordService {
   ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
-    const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
-    const canonical = existing[0];
-    if (canonical) {
-      return this.deliveryAttemptRpc.getJobRecord(canonical.id);
-    }
-
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
-    return this.jobs.create(input);
+    const canonical = await this.jobs.createOrFindByEndpointIdentity(input);
+    return this.deliveryAttemptRpc.getJobRecord(canonical.id);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {

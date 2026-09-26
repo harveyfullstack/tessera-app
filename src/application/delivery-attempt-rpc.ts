@@ -29,6 +29,10 @@ export class DeliveryAttemptRpc {
     private readonly rollbackEnabled: RollbackFeatureFlag = () => false,
   ) {}
 
+  usesLegacyWrites(accountId: string): boolean {
+    return this.rollbackEnabled(accountId);
+  }
+
   markRunning(jobId: string, workerId: string): Promise<JobRecord> {
     return this.write(jobId, {
       type: "execution",

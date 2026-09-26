@@ -5,12 +5,7 @@ import { InMemoryDeliveryAttemptRepository } from "../src/infrastructure/reposit
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { DeliveryAttemptRepository } from "../src/domain/delivery-attempt-repository";
 import type { JobRepository } from "../src/domain/job-repository";
-import type {
-  CreateJobInput,
-  JobRecord,
-  JobType,
-  UpdateJobExecutionInput,
-} from "../src/domain/job";
+import type { CreateJobInput } from "../src/domain/job";
 
 const baseInput: CreateJobInput = {
   accountId: "acct-1",
@@ -34,6 +29,39 @@ describe("JobRecordService", () => {
     const second = await service.ensureJobRecord(baseInput);
 
     expect(second.id).toBe(first.id);
+  });
+
+  test("identifies jobs by account and exact endpoint URL", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = createService(repo).service;
+    const first = await service.ensureJobRecord(baseInput);
+    const sameEndpoint = await service.ensureJobRecord({
+      ...baseInput,
+      metadata: { ...baseInput.metadata, payloadHash: "sha256:new-payload" },
+    });
+    const trailingSlash = await service.ensureJobRecord({
+      ...baseInput,
+      metadata: {
+        ...baseInput.metadata,
+        endpointUrl: `${baseInput.metadata.endpointUrl}/`,
+      },
+    });
+    const differentCase = await service.ensureJobRecord({
+      ...baseInput,
+      metadata: {
+        ...baseInput.metadata,
+        endpointUrl: baseInput.metadata.endpointUrl.toUpperCase(),
+      },
+    });
+    const differentAccount = await service.ensureJobRecord({
+      ...baseInput,
+      accountId: "acct-2",
+    });
+
+    expect(sameEndpoint.id).toBe(first.id);
+    expect(trailingSlash.id).not.toBe(first.id);
+    expect(differentCase.id).not.toBe(first.id);
+    expect(differentAccount.id).not.toBe(first.id);
   });
 
   test("appends execution writes and projects the latest attempt across retries", async () => {
@@ -118,8 +146,8 @@ describe("JobRecordService", () => {
     expect(await service.displayStatus(job)).toBe("stuck");
   });
 
-  test("can produce duplicate intent rows under race conditions", async () => {
-    const repo = new RacyJobRepository();
+  test("reuses the canonical job when endpoint requests race", async () => {
+    const repo = new InMemoryJobRepository();
     const service = createService(repo).service;
 
     const [a, b] = await Promise.all([
@@ -127,8 +155,8 @@ describe("JobRecordService", () => {
       service.ensureJobRecord(baseInput),
     ]);
 
-    expect(a.id).not.toBe(b.id);
-    expect(repo.created.length).toBe(2);
+    expect(a.id).toBe(b.id);
+    expect((await repo.listByBrief(baseInput.briefId)).length).toBe(1);
   });
 });
 
@@ -139,77 +167,4 @@ function createService(
   const attempts = new InMemoryDeliveryAttemptRepository();
   const rpc = new DeliveryAttemptRpc(repo, attempts, rollbackEnabled);
   return { service: new JobRecordService(repo, rpc), attempts };
-}
-
-class RacyJobRepository implements JobRepository {
-  private jobs = new Map<string, JobRecord>();
-  created: JobRecord[] = [];
-
-  async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
-    // Stale read window where concurrent callers both observe no row.
-    return [];
-  }
-
-  async findById(jobId: string): Promise<JobRecord | null> {
-    return this.jobs.get(jobId) ?? null;
-  }
-
-  async create(input: CreateJobInput): Promise<JobRecord> {
-    const now = new Date();
-    const id = crypto.randomUUID();
-    const record: JobRecord = {
-      id,
-      accountId: input.accountId,
-      briefId: input.briefId,
-      taskId: input.taskId,
-      parentJobId: input.parentJobId,
-      type: input.type,
-      metadata: input.metadata,
-      status: "queued",
-      retryCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.jobs.set(id, record);
-    this.created.push(record);
-    return record;
-  }
-
-  async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      status: input.status,
-      workerId: input.workerId,
-      errorMessage: input.errorMessage,
-      updatedAt: new Date(),
-    };
-
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async incrementRetry(jobId: string): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      retryCount: existing.retryCount + 1,
-      updatedAt: new Date(),
-    };
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return [...this.jobs.values()].filter((job) => job.briefId === briefId);
-  }
 }

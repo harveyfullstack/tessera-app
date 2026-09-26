@@ -7,7 +7,11 @@ WITH legacy AS (
   FROM (
     SELECT
       FIRST_VALUE(j.id) OVER (
-        PARTITION BY j.account_id, j.brief_id, j.type
+        PARTITION BY
+          j.account_id,
+          j.brief_id,
+          j.type,
+          (j.metadata ->> 'endpointUrl') COLLATE "C"
         ORDER BY j.created_at ASC, j.id ASC
       ) AS delivery_job_id,
       CASE
@@ -16,6 +20,8 @@ WITH legacy AS (
           AND j.started_at IS NULL
           AND j.completed_at IS NULL
           THEN j.retry_count
+        WHEN j.status = 'failed'
+          THEN GREATEST(j.retry_count, 1)
         ELSE j.retry_count + 1
       END AS expected_attempt_count
     FROM jobs AS j
@@ -44,7 +50,11 @@ WITH legacy AS (
   FROM (
     SELECT
       FIRST_VALUE(j.id) OVER (
-        PARTITION BY j.account_id, j.brief_id, j.type
+        PARTITION BY
+          j.account_id,
+          j.brief_id,
+          j.type,
+          (j.metadata ->> 'endpointUrl') COLLATE "C"
         ORDER BY j.created_at ASC, j.id ASC
       ) AS delivery_job_id,
       CASE
@@ -53,6 +63,8 @@ WITH legacy AS (
           AND j.started_at IS NULL
           AND j.completed_at IS NULL
           THEN j.retry_count
+        WHEN j.status = 'failed'
+          THEN GREATEST(j.retry_count, 1)
         ELSE j.retry_count + 1
       END AS expected_attempt_count
     FROM jobs AS j
