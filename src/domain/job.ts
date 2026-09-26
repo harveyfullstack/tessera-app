@@ -43,6 +43,27 @@ export interface JobRecord {
   createdAt: Date;
 }
 
+export interface DeliveryAttempt {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt: Date;
+  completedAt?: Date | undefined;
+}
+
+export interface DlqEntry {
+  jobId: string;
+  accountId: string;
+  briefId: string;
+  endpointUrl: string;
+  attemptBodies: string[];
+}
+
 export interface CreateJobInput {
   accountId: string;
   briefId: string;

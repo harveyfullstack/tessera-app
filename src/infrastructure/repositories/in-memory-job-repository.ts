@@ -3,6 +3,8 @@ import { JobNotFoundError } from "../../domain/errors";
 import type { JobRepository } from "../../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttempt,
+  DlqEntry,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -10,6 +12,8 @@ import type {
 
 export class InMemoryJobRepository implements JobRepository {
   private readonly jobs = new Map<string, JobRecord>();
+  private readonly attempts = new Map<string, DeliveryAttempt[]>();
+  private readonly dlq = new Map<string, DlqEntry>();
 
   async findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]> {
     return [...this.jobs.values()]
@@ -22,6 +26,11 @@ export class InMemoryJobRepository implements JobRepository {
   }
 
   async create(input: CreateJobInput): Promise<JobRecord> {
+    // Synchronous uniqueness check + insert prevents racing callers from
+    // producing two intent rows in the in-memory runtime.
+    const existing = [...this.jobs.values()].find((job) =>
+      job.accountId === input.accountId && job.briefId === input.briefId && job.type === input.type);
+    if (existing) return existing;
     const now = new Date();
     const job: JobRecord = {
       id: randomUUID(),
@@ -79,6 +88,42 @@ export class InMemoryJobRepository implements JobRepository {
 
     this.jobs.set(jobId, updated);
     return updated;
+  }
+
+  async appendAttempt(jobId: string, input: UpdateJobExecutionInput): Promise<DeliveryAttempt> {
+    if (!this.jobs.has(jobId)) {
+      throw new JobNotFoundError(jobId);
+    }
+    // No await between reading the sequence and writing it: concurrent calls
+    // serialize within this repository instance.
+    const previous = this.attempts.get(jobId) ?? [];
+    const now = new Date();
+    const attempt: DeliveryAttempt = {
+      id: randomUUID(),
+      deliveryJobId: jobId,
+      attemptNumber: previous.length + 1,
+      workerId: input.workerId ?? input.details?.workerId,
+      status: input.status,
+      responseStatus: input.details?.responseStatus,
+      responseLatencyMs: input.details?.responseLatencyMs,
+      errorBody: input.details?.errorBody ?? input.errorMessage,
+      startedAt: now,
+      completedAt: input.status === "running" || input.status === "queued" ? undefined : now,
+    };
+    this.attempts.set(jobId, [...previous, attempt]);
+    return attempt;
+  }
+
+  async listAttempts(jobId: string): Promise<DeliveryAttempt[]> {
+    return [...(this.attempts.get(jobId) ?? [])];
+  }
+
+  async enqueueDlq(entry: DlqEntry): Promise<void> {
+    this.dlq.set(entry.jobId, entry);
+  }
+
+  async listDlq(briefId: string): Promise<DlqEntry[]> {
+    return [...this.dlq.values()].filter((entry) => entry.briefId === briefId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

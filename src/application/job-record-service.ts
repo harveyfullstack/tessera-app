@@ -1,38 +1,35 @@
-import { JobNotFoundError } from "../domain/errors";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  private readonly rpc: DeliveryAttemptRpc;
+
+  constructor(
+    private readonly jobs: JobRepository,
+    rollbackEnabled: (accountId: string) => boolean = () => false,
+  ) {
+    this.rpc = new DeliveryAttemptRpc(jobs, rollbackEnabled);
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
-    const canonical = existing[0];
+    const canonical = existing.find((job) => job.accountId === input.accountId);
     if (canonical) {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // The repository enforces the unique account/brief/type key atomically.
     return this.jobs.create(input);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.rpc.write(jobId, "running", { workerId });
   }
 
   async markFailed(
@@ -40,41 +37,20 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.rpc.write(jobId, "failed", details, errorMessage);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.rpc.write(jobId, "completed", details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.rpc.write(jobId, "queued");
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string): Promise<(Omit<JobRecord, "status"> & { status: string })[]> {
+    const jobs = await this.jobs.listByBrief(briefId);
+    return Promise.all(jobs.map(async (job) => ({ ...job, status: await this.displayStatus(job) })));
   }
 
   async ensureWebhookDispatchJob(
@@ -90,13 +66,21 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.rpc.isRollbackEnabled(job.accountId)) return job.status;
+    const attempts = await this.jobs.listAttempts(job.id);
+    const latest = attempts.reduce(
+      (current, attempt) => !current || attempt.attemptNumber > current.attemptNumber ? attempt : current,
+      undefined as (typeof attempts)[number] | undefined,
+    );
+    if (!latest) return "queued";
+    if (latest.status === "running" && Date.now() - latest.startedAt.getTime() > 5 * 60_000) {
+      return "stuck";
+    }
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    return (await this.displayStatus(job)) !== "running";
   }
 }
