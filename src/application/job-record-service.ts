@@ -2,7 +2,9 @@ import { JobNotFoundError } from "../domain/errors";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DlqSummary,
   JobExecutionDetails,
+  JobListOptions,
   JobMetadata,
   JobRecord,
   JobType,
@@ -73,8 +75,16 @@ export class JobRecordService {
     return this.jobs.incrementRetry(jobId);
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string, options?: JobListOptions): Promise<JobRecord[]> {
+    return this.jobs.listByBrief(briefId, options);
+  }
+
+  async dlqSummary(briefId: string): Promise<DlqSummary> {
+    return this.jobs.getDlqSummary(briefId);
+  }
+
+  async drainDlq(briefId: string): Promise<JobRecord[]> {
+    return this.jobs.listByBrief(briefId, { status: "dlq" });
   }
 
   async ensureWebhookDispatchJob(
