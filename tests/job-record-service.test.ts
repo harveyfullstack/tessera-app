@@ -50,7 +50,7 @@ describe("JobRecordService", () => {
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
     expect(final.latestAttempt?.workerId).toBe("worker-us-east-07");
-    expect(final.latestAttempt?.attemptNumber).toBe(3);
+    expect(final.latestAttempt?.attemptNumber).toBe(4);
   });
 
   test("stores terminal execution details on the latest delivery attempt", async () => {
@@ -68,6 +68,26 @@ describe("JobRecordService", () => {
     expect(completed.latestAttempt?.deliveryJobId).toBe(job.id);
     expect(completed.latestAttempt?.responseStatus).toBe(200);
     expect(completed.latestAttempt?.responseLatencyMs).toBe(187);
+  });
+
+  test("computes monotonically increasing attempt numbers inside the RPC", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+
+    const first = await service.markCompleted(job.id, {
+      workerId: "worker-us-east-04",
+      attemptNumber: 99,
+      responseStatus: 200,
+    });
+    const second = await service.markFailed(job.id, "second attempt failed", {
+      workerId: "worker-us-east-05",
+      attemptNumber: 99,
+      responseStatus: 500,
+    });
+
+    expect(first.latestAttempt?.attemptNumber).toBe(1);
+    expect(second.latestAttempt?.attemptNumber).toBe(2);
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
