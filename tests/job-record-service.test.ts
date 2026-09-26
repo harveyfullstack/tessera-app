@@ -4,6 +4,7 @@ import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-mem
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttempt,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -49,6 +50,24 @@ describe("JobRecordService", () => {
     // Pre-migration pain: mutable row with no attempt history. The earlier
     // timeout error is gone the moment the next attempt starts.
     expect(final.errorMessage).toBeUndefined();
+  });
+
+  test("allocates unique, ordered attempt numbers for racing execution writes", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    await Promise.all(Array.from({ length: 20 }, (_, n) => service.markRunning(job.id, `worker-${n}`)));
+    const attempts = await repo.listAttempts(job.id);
+    expect(attempts.map((a) => a.attemptNumber)).toEqual(Array.from({ length: 20 }, (_, n) => n + 1));
+  });
+
+  test("rollback flag is evaluated per account at the RPC boundary", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo, (accountId) => accountId === "acct-1");
+    const job = await service.ensureJobRecord(baseInput);
+    await service.markRunning(job.id, "worker-1");
+    expect(await repo.listAttempts(job.id)).toEqual([]);
+    expect((await repo.findById(job.id))?.status).toBe("running");
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
@@ -131,6 +150,14 @@ class RacyJobRepository implements JobRepository {
     };
     this.jobs.set(jobId, updated);
     return updated;
+  }
+
+  async appendAttempt(_jobId: string, _input: UpdateJobExecutionInput): Promise<DeliveryAttempt> {
+    throw new Error("not used in race test");
+  }
+
+  async listAttempts(_jobId: string): Promise<DeliveryAttempt[]> {
+    return [];
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

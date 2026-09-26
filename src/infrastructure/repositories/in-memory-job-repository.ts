@@ -3,6 +3,7 @@ import { JobNotFoundError } from "../../domain/errors";
 import type { JobRepository } from "../../domain/job-repository";
 import type {
   CreateJobInput,
+  DeliveryAttempt,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -10,6 +11,7 @@ import type {
 
 export class InMemoryJobRepository implements JobRepository {
   private readonly jobs = new Map<string, JobRecord>();
+  private readonly attempts = new Map<string, DeliveryAttempt[]>();
 
   async findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]> {
     return [...this.jobs.values()]
@@ -79,6 +81,34 @@ export class InMemoryJobRepository implements JobRepository {
 
     this.jobs.set(jobId, updated);
     return updated;
+  }
+
+  async appendAttempt(jobId: string, input: UpdateJobExecutionInput): Promise<DeliveryAttempt> {
+    if (!this.jobs.has(jobId)) {
+      throw new JobNotFoundError(jobId);
+    }
+    // No await between reading the sequence and writing it: concurrent calls
+    // serialize within this repository instance.
+    const previous = this.attempts.get(jobId) ?? [];
+    const now = new Date();
+    const attempt: DeliveryAttempt = {
+      id: randomUUID(),
+      deliveryJobId: jobId,
+      attemptNumber: previous.length + 1,
+      workerId: input.workerId ?? input.details?.workerId,
+      status: input.status,
+      responseStatus: input.details?.responseStatus,
+      responseLatencyMs: input.details?.responseLatencyMs,
+      errorBody: input.details?.errorBody ?? input.errorMessage,
+      startedAt: now,
+      completedAt: input.status === "running" || input.status === "queued" ? undefined : now,
+    };
+    this.attempts.set(jobId, [...previous, attempt]);
+    return attempt;
+  }
+
+  async listAttempts(jobId: string): Promise<DeliveryAttempt[]> {
+    return [...(this.attempts.get(jobId) ?? [])];
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
