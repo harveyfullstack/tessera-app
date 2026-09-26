@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { DeliveryOrchestrator } from "../src/application/delivery-orchestrator";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { JobRecordService } from "../src/application/job-record-service";
+import { InMemoryDeliveryAttemptRepository } from "../src/infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 
 const baseRequest = {
@@ -16,7 +18,7 @@ const baseRequest = {
 
 describe("DeliveryOrchestrator", () => {
   test("completes a happy-path webhook delivery", async () => {
-    const service = new JobRecordService(new InMemoryJobRepository());
+    const service = createService().service;
     const orchestrator = new DeliveryOrchestrator(service);
 
     const result = await orchestrator.deliver({
@@ -29,7 +31,7 @@ describe("DeliveryOrchestrator", () => {
   });
 
   test("marks a failed run and increments retry count when simulateFailure is set", async () => {
-    const service = new JobRecordService(new InMemoryJobRepository());
+    const { service, attempts } = createService();
     const orchestrator = new DeliveryOrchestrator(service);
 
     const result = await orchestrator.deliver({
@@ -40,5 +42,24 @@ describe("DeliveryOrchestrator", () => {
     expect(result.status).toBe("failed");
     expect(result.retryCount).toBe(1);
     expect(result.errorMessage).toContain("Simulated webhook delivery failure");
+    const history = await attempts.listByJobId(result.id);
+    expect(history.at(-1)?.errorMessage).toContain(
+      "Simulated webhook delivery failure",
+    );
+    expect(history.at(-1)?.errorBody).toBe(
+      "endpoint returned 503 after 30s timeout",
+    );
   });
 });
+
+function createService(): {
+  service: JobRecordService;
+  attempts: InMemoryDeliveryAttemptRepository;
+} {
+  const jobs = new InMemoryJobRepository();
+  const attempts = new InMemoryDeliveryAttemptRepository();
+  return {
+    service: new JobRecordService(jobs, new DeliveryAttemptRpc(jobs, attempts)),
+    attempts,
+  };
+}

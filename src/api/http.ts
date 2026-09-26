@@ -1,9 +1,19 @@
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
+import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { JobRecordService } from "../application/job-record-service";
+import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const deliveryAttemptRpc = new DeliveryAttemptRpc(
+  jobRepository,
+  new InMemoryDeliveryAttemptRepository(),
+  (accountId) =>
+    (process.env.WEBHOOK_DELIVERY_ROLLBACK_ACCOUNT_IDS ?? "")
+      .split(",")
+      .some((configuredAccountId) => configuredAccountId.trim() === accountId),
+);
+const jobRecords = new JobRecordService(jobRepository, deliveryAttemptRpc);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {

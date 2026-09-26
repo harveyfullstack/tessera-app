@@ -13,6 +13,10 @@ The TypeScript source models event ingestion, webhook delivery, query routing, a
 - `sql/`: database schema and migrations.
 - `tests/`: behavior and regression checks.
 
+Webhook delivery uses append-only attempts by default. Set
+`WEBHOOK_DELIVERY_ROLLBACK_ACCOUNT_IDS` to a comma-separated list of account IDs
+to route those accounts through the legacy job-write path.
+
 ## Mobile SDK startup contract
 
 The mobile SDK uses a four-entry startup buffer and preserves event order through initialization. A failed flush retains undelivered events without replaying successful deliveries. LTE flush behavior and ProGuard configuration are separate from startup buffering.
