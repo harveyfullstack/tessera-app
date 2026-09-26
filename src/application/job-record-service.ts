@@ -5,7 +5,6 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
 
 export class JobRecordService {
@@ -49,8 +48,9 @@ export class JobRecordService {
     return this.rpc.write(jobId, "queued");
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string): Promise<(Omit<JobRecord, "status"> & { status: string })[]> {
+    const jobs = await this.jobs.listByBrief(briefId);
+    return Promise.all(jobs.map(async (job) => ({ ...job, status: await this.displayStatus(job) })));
   }
 
   async ensureWebhookDispatchJob(
@@ -66,13 +66,21 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.rpc.isRollbackEnabled(job.accountId)) return job.status;
+    const attempts = await this.jobs.listAttempts(job.id);
+    const latest = attempts.reduce(
+      (current, attempt) => !current || attempt.attemptNumber > current.attemptNumber ? attempt : current,
+      undefined as (typeof attempts)[number] | undefined,
+    );
+    if (!latest) return "queued";
+    if (latest.status === "running" && Date.now() - latest.startedAt.getTime() > 5 * 60_000) {
+      return "stuck";
+    }
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    return (await this.displayStatus(job)) !== "running";
   }
 }

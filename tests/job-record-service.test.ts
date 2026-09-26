@@ -61,6 +61,21 @@ describe("JobRecordService", () => {
     expect(attempts.map((a) => a.attemptNumber)).toEqual(Array.from({ length: 20 }, (_, n) => n + 1));
   });
 
+  test("derives queued, latest and stuck statuses from attempt history", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    expect(await service.displayStatus(job)).toBe("queued");
+    await service.markRunning(job.id, "worker-1");
+    expect(await service.displayStatus(job)).toBe("running");
+    const attempts = await repo.listAttempts(job.id);
+    attempts[0]!.startedAt = new Date(Date.now() - 6 * 60_000);
+    expect(await service.displayStatus(job)).toBe("stuck");
+    await service.markFailed(job.id, "timeout");
+    expect(await service.displayStatus(job)).toBe("failed");
+    expect((await service.listByBrief(job.briefId))[0]?.status).toBe("failed");
+  });
+
   test("rollback flag is evaluated per account at the RPC boundary", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo, (accountId) => accountId === "acct-1");
@@ -68,6 +83,7 @@ describe("JobRecordService", () => {
     await service.markRunning(job.id, "worker-1");
     expect(await repo.listAttempts(job.id)).toEqual([]);
     expect((await repo.findById(job.id))?.status).toBe("running");
+    expect(await service.displayStatus((await repo.findById(job.id))!)).toBe("running");
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
