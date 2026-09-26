@@ -32,7 +32,10 @@ export const server = Bun.serve({
           status: status === "dlq" ? "dlq" : undefined,
         });
         const dlq = await jobRecords.dlqSummary(briefId);
-        return Response.json({ jobs: rows, dlq });
+        return Response.json({
+          jobs: rows.map((job) => ({ ...job, displayStatus: jobRecords.displayStatus(job) })),
+          dlq,
+        });
       }
     }
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
@@ -88,6 +89,38 @@ describe("JobRecordService", () => {
 
     expect(first.latestAttempt?.attemptNumber).toBe(1);
     expect(second.latestAttempt?.attemptNumber).toBe(2);
+  });
+
+  test("derives display status from the latest attempt", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(service.displayStatus(job)).toBe("queued");
+
+    const running = await service.markRunning(job.id, "worker-us-east-04");
+    expect(service.displayStatus(running)).toBe("running");
+
+    const staleRunning: JobRecord = {
+      ...running,
+      latestAttempt: {
+        ...running.latestAttempt!,
+        startedAt: new Date("2026-09-26T10:00:00.000Z"),
+      },
+    };
+    expect(JobRecordService.displayStatus(staleRunning, new Date("2026-09-26T10:06:00.000Z"))).toBe(
+      "stuck",
+    );
+  });
+
+  test("falls back to job status when the rollback flag is enabled", async () => {
+    const repo = new InMemoryJobRepository();
+    const rpc = new DeliveryAttemptRpc(repo, { rollbackEnabled: () => true });
+    const service = new JobRecordService(repo, rpc);
+    const job = await service.ensureJobRecord(baseInput);
+    const running = await service.markRunning(job.id, "worker-us-east-04");
+
+    expect(service.displayStatus({ ...running, status: "failed" })).toBe("failed");
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {

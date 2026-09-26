@@ -116,8 +116,21 @@ export class JobRecordService {
     return JobRecordService.displayStatus(job);
   }
 
-  static displayStatus(job: JobRecord): string {
-    return job.latestAttempt?.status ?? "queued";
+  static displayStatus(job: JobRecord, now = new Date()): string {
+    const latest = job.latestAttempt;
+    if (!latest) {
+      return "queued";
+    }
+
+    if (
+      latest.status === "running" &&
+      latest.startedAt &&
+      now.getTime() - latest.startedAt.getTime() > 5 * 60 * 1000
+    ) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
