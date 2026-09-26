@@ -7,6 +7,8 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+export type DlqStatus = "active" | "dlq";
+
 export interface JobMetadata {
   customerId: string;
   subscriptionId: string;
@@ -23,6 +25,20 @@ export interface JobExecutionDetails {
   errorBody?: string | undefined;
 }
 
+export interface DeliveryAttempt {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt?: Date | undefined;
+  completedAt?: Date | undefined;
+  createdAt: Date;
+}
+
 export interface JobRecord {
   id: string;
   accountId: string;
@@ -32,11 +48,13 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Intent row plus latest execution projection for backwards-compatible reads.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
   errorMessage?: string | undefined;
+  latestAttempt?: DeliveryAttempt | undefined;
+  dlqStatus?: DlqStatus | undefined;
   startedAt?: Date | undefined;
   completedAt?: Date | undefined;
   updatedAt: Date;
@@ -57,4 +75,13 @@ export interface UpdateJobExecutionInput {
   workerId?: string | undefined;
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
+}
+
+export interface DlqSummary {
+  count: number;
+  lastAttemptBodies: string[];
+}
+
+export interface JobListOptions {
+  status?: JobStatus | DlqStatus | undefined;
 }

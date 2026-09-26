@@ -27,8 +27,15 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const status = url.searchParams.get("status") ?? undefined;
+        const rows = await jobRecords.listByBrief(briefId, {
+          status: status === "dlq" ? "dlq" : undefined,
+        });
+        const dlq = await jobRecords.dlqSummary(briefId);
+        return Response.json({
+          jobs: rows.map((job) => ({ ...job, displayStatus: jobRecords.displayStatus(job) })),
+          dlq,
+        });
       }
     }
 

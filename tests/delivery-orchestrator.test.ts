@@ -41,4 +41,22 @@ describe("DeliveryOrchestrator", () => {
     expect(result.retryCount).toBe(1);
     expect(result.errorMessage).toContain("Simulated webhook delivery failure");
   });
+
+  test("moves endpoints past the retry budget into the DLQ summary", async () => {
+    const service = new JobRecordService(new InMemoryJobRepository(1));
+    const orchestrator = new DeliveryOrchestrator(service);
+
+    await orchestrator.deliver({
+      ...baseRequest,
+      simulateFailure: true,
+    });
+
+    const rows = await service.listByBrief(baseRequest.briefId, { status: "dlq" });
+    const summary = await service.dlqSummary(baseRequest.briefId);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.dlqStatus).toBe("dlq");
+    expect(summary.count).toBe(1);
+    expect(summary.lastAttemptBodies).toEqual(["endpoint returned 503 after 30s timeout"]);
+  });
 });

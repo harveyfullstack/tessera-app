@@ -1,15 +1,25 @@
 import { JobNotFoundError } from "../domain/errors";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DlqSummary,
   JobExecutionDetails,
+  JobListOptions,
   JobMetadata,
   JobRecord,
   JobType,
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  private readonly attempts: DeliveryAttemptRpc;
+
+  constructor(
+    private readonly jobs: JobRepository,
+    attempts?: DeliveryAttemptRpc,
+  ) {
+    this.attempts = attempts ?? new DeliveryAttemptRpc(jobs);
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -28,7 +38,7 @@ export class JobRecordService {
       throw new JobNotFoundError(jobId);
     }
 
-    return this.jobs.updateExecution(jobId, {
+    return this.attempts.recordExecution(jobId, {
       status: "running",
       workerId,
       details: { workerId },
@@ -45,7 +55,7 @@ export class JobRecordService {
       throw new JobNotFoundError(jobId);
     }
 
-    return this.jobs.updateExecution(jobId, {
+    return this.attempts.recordExecution(jobId, {
       status: "failed",
       errorMessage,
       details,
@@ -58,7 +68,7 @@ export class JobRecordService {
       throw new JobNotFoundError(jobId);
     }
 
-    return this.jobs.updateExecution(jobId, {
+    return this.attempts.recordExecution(jobId, {
       status: "completed",
       details,
     });
@@ -70,11 +80,19 @@ export class JobRecordService {
       throw new JobNotFoundError(jobId);
     }
 
-    return this.jobs.incrementRetry(jobId);
+    return this.attempts.recordRetry(jobId);
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string, options?: JobListOptions): Promise<JobRecord[]> {
+    return this.jobs.listByBrief(briefId, options);
+  }
+
+  async dlqSummary(briefId: string): Promise<DlqSummary> {
+    return this.jobs.getDlqSummary(briefId);
+  }
+
+  async drainDlq(briefId: string): Promise<JobRecord[]> {
+    return this.jobs.listByBrief(briefId, { status: "dlq" });
   }
 
   async ensureWebhookDispatchJob(
@@ -90,9 +108,29 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  displayStatus(job: JobRecord): string {
+    if (this.attempts.isRollbackEnabled()) {
+      return job.status ?? "queued";
+    }
+
+    return JobRecordService.displayStatus(job);
+  }
+
+  static displayStatus(job: JobRecord, now = new Date()): string {
+    const latest = job.latestAttempt;
+    if (!latest) {
+      return "queued";
+    }
+
+    if (
+      latest.status === "running" &&
+      latest.startedAt &&
+      now.getTime() - latest.startedAt.getTime() > 5 * 60 * 1000
+    ) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
