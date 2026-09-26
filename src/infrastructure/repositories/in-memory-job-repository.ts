@@ -11,10 +11,15 @@ import type {
 export class InMemoryJobRepository implements JobRepository {
   private readonly jobs = new Map<string, JobRecord>();
 
-  async findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]> {
-    return [...this.jobs.values()]
-      .filter((job) => job.briefId === briefId && job.type === type)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  async createOrFindByEndpointIdentity(input: CreateJobInput): Promise<JobRecord> {
+    const existing = [...this.jobs.values()].find(
+      (job) =>
+        job.accountId === input.accountId &&
+        job.briefId === input.briefId &&
+        job.type === input.type &&
+        job.metadata.endpointUrl === input.metadata.endpointUrl,
+    );
+    return existing ?? this.create(input);
   }
 
   async findById(jobId: string): Promise<JobRecord | null> {

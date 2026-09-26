@@ -6,7 +6,7 @@ import type {
 } from "./job";
 
 export interface JobRepository {
-  findByBriefAndType(briefId: string, type: JobType): Promise<JobRecord[]>;
+  createOrFindByEndpointIdentity(input: CreateJobInput): Promise<JobRecord>;
   findById(jobId: string): Promise<JobRecord | null>;
   create(input: CreateJobInput): Promise<JobRecord>;
   updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;
