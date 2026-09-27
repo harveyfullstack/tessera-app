@@ -5,6 +5,7 @@ export type JobStatus =
   | "running"
   | "completed"
   | "failed"
+  | "dlq"
   | "cancelled";
 
 export interface JobMetadata {
@@ -23,6 +24,16 @@ export interface JobExecutionDetails {
   errorBody?: string | undefined;
 }
 
+export interface JobAttempt {
+  attemptNumber: number;
+  body?: string | undefined;
+  workerId?: string | undefined;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  startedAt: Date;
+  completedAt?: Date | undefined;
+}
+
 export interface JobRecord {
   id: string;
   accountId: string;
@@ -36,6 +47,7 @@ export interface JobRecord {
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
+  attempts?: JobAttempt[] | undefined;
   errorMessage?: string | undefined;
   startedAt?: Date | undefined;
   completedAt?: Date | undefined;

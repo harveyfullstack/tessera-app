@@ -33,6 +33,7 @@ export class InMemoryJobRepository implements JobRepository {
       metadata: input.metadata,
       status: "queued",
       retryCount: 0,
+      attempts: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -48,6 +49,25 @@ export class InMemoryJobRepository implements JobRepository {
     }
 
     const now = new Date();
+    const attempts = [...(job.attempts ?? [])];
+    if (input.status === "running") {
+      attempts.push({
+        attemptNumber: job.retryCount + 1,
+        workerId: input.workerId,
+        startedAt: now,
+      });
+    } else if (attempts.length > 0) {
+      const last = attempts[attempts.length - 1];
+      if (last) {
+        attempts[attempts.length - 1] = {
+          ...last,
+          body: input.details?.errorBody ?? input.errorMessage ?? last.body,
+          responseStatus: input.details?.responseStatus ?? last.responseStatus,
+          responseLatencyMs: input.details?.responseLatencyMs ?? last.responseLatencyMs,
+          completedAt: now,
+        };
+      }
+    }
     const updated: JobRecord = {
       ...job,
       status: input.status,
@@ -56,9 +76,10 @@ export class InMemoryJobRepository implements JobRepository {
       updatedAt: now,
       startedAt: input.status === "running" ? now : job.startedAt,
       completedAt:
-        input.status === "completed" || input.status === "failed" || input.status === "cancelled"
+        input.status === "completed" || input.status === "failed" || input.status === "dlq" || input.status === "cancelled"
           ? now
           : job.completedAt,
+      attempts,
     };
 
     this.jobs.set(jobId, updated);

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
+import { InMemoryDeliveryAttemptStore } from "../src/infrastructure/repositories/in-memory-delivery-attempt-store";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
   CreateJobInput,
@@ -49,6 +51,42 @@ describe("JobRecordService", () => {
     // Pre-migration pain: mutable row with no attempt history. The earlier
     // timeout error is gone the moment the next attempt starts.
     expect(final.errorMessage).toBeUndefined();
+  });
+
+  test("derives UI status from the latest delivery attempt", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    expect(await service.displayStatus(job)).toBe("running");
+
+    const attemptStore = new InMemoryDeliveryAttemptStore();
+    await attemptStore.insert({
+      id: crypto.randomUUID(),
+      deliveryJobId: job.id,
+      attemptNumber: 2,
+      status: "running",
+      workerId: "worker-us-east-05",
+      startedAt: new Date(Date.now() - 6 * 60 * 1000),
+    });
+
+    const stuckService = new JobRecordService(repo, new DeliveryAttemptRpc(repo, { attemptStore }));
+    expect(await stuckService.displayStatus(job)).toBe("stuck");
+  });
+
+  test("falls back to job status when rollback is enabled", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(
+      repo,
+      new DeliveryAttemptRpc(repo, { rollbackEnabledForAccount: () => true }),
+    );
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    expect(await service.displayStatus(job)).toBe("running");
   });
 
   test("can produce duplicate intent rows under race conditions", async () => {
