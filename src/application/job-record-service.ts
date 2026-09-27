@@ -1,14 +1,13 @@
 import { JobNotFoundError } from "../domain/errors";
-import type { JobRepository } from "../domain/job-repository";
-import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { DeliveryAttemptRecord } from "../domain/delivery-attempt";
+import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+import { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
 export class JobRecordService {
   private readonly deliveryAttempts: DeliveryAttemptRpc;
@@ -63,7 +62,15 @@ export class JobRecordService {
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+    const jobs = await this.jobs.listByBrief(briefId);
+    return Promise.all(
+      jobs.map(async (job) => ({
+        ...job,
+        status: job.status === "dlq"
+          ? "dlq"
+          : (await this.displayStatus(job)) as JobRecord["status"],
+      })),
+    );
   }
 
   async listAttempts(jobId: string): Promise<DeliveryAttemptRecord[]> {
@@ -92,13 +99,47 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<string> {
+    if (this.deliveryAttempts.isRollbackEnabledForAccount(job.accountId)) {
+      const current = await this.jobs.findById(job.id);
+      return current?.status ?? job.status ?? "queued";
+    }
+
+    const attempts = await this.deliveryAttempts.listAttempts(job.id);
+    return JobRecordService.displayStatusFromAttempts(attempts);
+  }
+
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
+    return status !== "running" && status !== "stuck";
+  }
+
+  static displayStatus(job: JobRecord, attempts?: DeliveryAttemptRecord[]): string {
+    return attempts === undefined
+      ? job.status
+      : JobRecordService.displayStatusFromAttempts(attempts);
   }
 
   static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+    const status = JobRecordService.displayStatus(job);
+    return status !== "running" && status !== "stuck";
+  }
+
+  private static displayStatusFromAttempts(
+    attempts: DeliveryAttemptRecord[],
+  ): string {
+    if (attempts.length === 0) {
+      return "queued";
+    }
+
+    const latest = attempts.reduce((current, candidate) =>
+      candidate.attemptNumber > current.attemptNumber ? candidate : current,
+    );
+
+    if (latest.status === "running" && Date.now() - latest.startedAt.getTime() > 5 * 60 * 1000) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 }

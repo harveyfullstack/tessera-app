@@ -43,6 +43,10 @@ export class DeliveryAttemptRpc {
       options.rollbackEnabledForAccount ?? (() => false);
   }
 
+  isRollbackEnabledForAccount(accountId: string): boolean {
+    return this.rollbackEnabledForAccount(accountId);
+  }
+
   async record(jobId: string, input: DeliveryAttemptInput): Promise<JobRecord> {
     const job = await this.jobs.findById(jobId);
     if (!job) {
