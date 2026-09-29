@@ -1,4 +1,4 @@
-import { JobNotFoundError } from "../domain/errors";
+import { DeliveryAttemptRpc, type RollbackFlag } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
@@ -9,26 +9,25 @@ import type {
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  private readonly rpc: DeliveryAttemptRpc;
+
+  constructor(private readonly jobs: JobRepository, rollbackEnabled?: RollbackFlag) {
+    this.rpc = new DeliveryAttemptRpc(jobs, rollbackEnabled);
+  }
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
-    const canonical = existing[0];
+    const canonical = existing.find((job) => job.accountId === input.accountId);
     if (canonical) {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // The repository enforces the canonical (account, brief, type) intent key.
     return this.jobs.create(input);
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
+    return this.rpc.write(jobId, {
       status: "running",
       workerId,
       details: { workerId },
@@ -40,12 +39,7 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
+    return this.rpc.write(jobId, {
       status: "failed",
       errorMessage,
       details,
@@ -53,24 +47,14 @@ export class JobRecordService {
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
+    return this.rpc.write(jobId, {
       status: "completed",
       details,
     });
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.rpc.write(jobId, { status: "queued" }, true);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {

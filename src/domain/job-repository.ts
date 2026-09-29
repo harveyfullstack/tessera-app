@@ -1,5 +1,6 @@
 import type {
   CreateJobInput,
+  DeliveryAttempt,
   JobRecord,
   JobType,
   UpdateJobExecutionInput,
@@ -12,4 +13,6 @@ export interface JobRepository {
   updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;
   incrementRetry(jobId: string): Promise<JobRecord>;
   listByBrief(briefId: string): Promise<JobRecord[]>;
+  appendExecution(jobId: string, input: UpdateJobExecutionInput, retry?: boolean): Promise<JobRecord>;
+  attemptsForJob(jobId: string): Promise<DeliveryAttempt[]>;
 }
