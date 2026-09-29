@@ -5,13 +5,15 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
+  JobStatus,
 } from "../domain/job";
 
 export class JobRecordService {
   private readonly rpc: DeliveryAttemptRpc;
+  private readonly rollbackEnabled: RollbackFlag;
 
-  constructor(private readonly jobs: JobRepository, rollbackEnabled?: RollbackFlag) {
+  constructor(private readonly jobs: JobRepository, rollbackEnabled: RollbackFlag = () => false) {
+    this.rollbackEnabled = rollbackEnabled;
     this.rpc = new DeliveryAttemptRpc(jobs, rollbackEnabled);
   }
 
@@ -57,8 +59,13 @@ export class JobRecordService {
     return this.rpc.write(jobId, { status: "queued" }, true);
   }
 
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return this.jobs.listByBrief(briefId);
+  async listByBrief(briefId: string): Promise<(JobRecord & { displayStatus: string })[]> {
+    const jobs = await this.jobs.listByBrief(briefId);
+    const rows = await Promise.all(jobs.map(async (job) => ({
+      ...job,
+      displayStatus: await this.displayStatus(job),
+    })));
+    return rows;
   }
 
   async ensureWebhookDispatchJob(
@@ -74,13 +81,19 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  async displayStatus(job: JobRecord): Promise<JobStatus | "stuck"> {
+    if (this.rollbackEnabled(job.accountId)) return job.status;
+    const attempts = await this.jobs.attemptsForJob(job.id);
+    const latest = attempts.at(-1);
+    if (!latest) return "queued";
+    if (latest.status === "running" && Date.now() - latest.startedAt.getTime() > 5 * 60_000) {
+      return "stuck";
+    }
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
 }

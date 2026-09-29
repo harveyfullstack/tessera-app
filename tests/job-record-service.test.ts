@@ -47,6 +47,26 @@ describe("JobRecordService", () => {
     expect(history[1]?.errorBody).toBe("timeout body");
   });
 
+  test("derives display status from latest attempt, or legacy status during rollback", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo);
+    const job = await service.ensureJobRecord(baseInput);
+    expect(await service.displayStatus(job)).toBe("queued");
+    await service.markRunning(job.id, "worker-1");
+    expect(await service.displayStatus(job)).toBe("running");
+    const now = Date.now;
+    try {
+      Date.now = () => now() + 5 * 60_000 + 1;
+      expect(await service.displayStatus(job)).toBe("stuck");
+    } finally {
+      Date.now = now;
+    }
+    await service.markCompleted(job.id, { responseStatus: 200 });
+    expect(await service.displayStatus(job)).toBe("completed");
+    const rollback = new JobRecordService(repo, () => true);
+    expect(await rollback.displayStatus({ ...job, status: "failed" })).toBe("failed");
+  });
+
   test("account rollback uses legacy writes without adding history", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo, (account) => account === "acct-1");
