@@ -67,6 +67,28 @@ describe("JobRecordService", () => {
     expect(await rollback.displayStatus({ ...job, status: "failed" })).toBe("failed");
   });
 
+  test("drains at account retry budget and surfaces endpoint with three latest bodies", async () => {
+    const repo = new InMemoryJobRepository();
+    const service = new JobRecordService(repo, () => false, () => 2);
+    const job = await service.ensureJobRecord(baseInput);
+    await service.retry(job.id);
+    expect((await service.processDrainDlq(job.id)).status).toBe("queued");
+    await service.markFailed(job.id, "first", { errorBody: "first body" });
+    await service.retry(job.id);
+    await service.markFailed(job.id, "second", { errorBody: "second body" });
+    const drained = await service.processDrainDlq(job.id);
+    expect(await service.displayStatus(drained)).toBe("dlq");
+    expect((await service.listByBrief(job.briefId, "dlq")).length).toBe(1);
+    const summary = await service.dlqSummary(job.briefId);
+    expect(summary.count).toBe(1);
+    expect(summary.endpoints[0]?.endpointUrl).toBe(baseInput.metadata.endpointUrl);
+    expect(summary.endpoints[0]?.attempts.map((a) => a.errorBody)).toEqual(["first body", "second body"]);
+    expect(summary.endpoints[0]?.attempts.map((a) => a.attemptNumber)).toEqual([2, 4]);
+    expect((await repo.attemptsForJob(job.id)).length).toBe(5);
+    await service.processDrainDlq(job.id);
+    expect((await repo.attemptsForJob(job.id)).length).toBe(5);
+  });
+
   test("account rollback uses legacy writes without adding history", async () => {
     const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo, (account) => account === "acct-1");

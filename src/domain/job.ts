@@ -5,7 +5,8 @@ export type JobStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "dlq";
 
 export interface JobMetadata {
   customerId: string;
