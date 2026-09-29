@@ -5,7 +5,8 @@ export type JobStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "dlq";
 
 export interface JobMetadata {
   customerId: string;
@@ -23,6 +24,19 @@ export interface JobExecutionDetails {
   errorBody?: string | undefined;
 }
 
+export interface DeliveryAttempt {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  workerId?: string | undefined;
+  status: JobStatus;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+  startedAt: Date;
+  createdAt: Date;
+}
+
 export interface JobRecord {
   id: string;
   accountId: string;
@@ -31,6 +45,7 @@ export interface JobRecord {
   parentJobId?: string | undefined;
   type: JobType;
   metadata: JobMetadata;
+  deliveryJobId?: string | undefined;
 
   // Pre-migration shape: intent + execution state co-located on one row.
   status: JobStatus;
