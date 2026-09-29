@@ -81,6 +81,17 @@ export class InMemoryJobRepository implements JobRepository {
     return updated;
   }
 
+  async linkDeliveryJob(jobId: string, deliveryJobId: string): Promise<JobRecord> {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new JobNotFoundError(jobId);
+    }
+
+    const updated: JobRecord = { ...job, deliveryJobId };
+    this.jobs.set(jobId, updated);
+    return updated;
+  }
+
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return [...this.jobs.values()]
       .filter((job) => job.briefId === briefId)

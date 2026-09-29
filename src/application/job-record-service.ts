@@ -1,15 +1,47 @@
-import { JobNotFoundError } from "../domain/errors";
+import type { DeliveryAttempt, DeliveryAttemptStatus } from "../domain/delivery-attempt";
+import type { DeliveryAttemptStore } from "../domain/delivery-attempt-store";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+
+export type DisplayStatus = DeliveryAttemptStatus | "stuck";
+
+const DISPLAY_STATUSES: readonly DisplayStatus[] = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "dlq",
+  "stuck",
+];
+
+export function isDisplayStatus(value: string): value is DisplayStatus {
+  return (DISPLAY_STATUSES as readonly string[]).includes(value);
+}
+
+// A running attempt whose started_at is older than this is shown as stuck.
+export const STUCK_ATTEMPT_THRESHOLD_MS = 5 * 60 * 1000;
+
+export function latestAttempt(attempts: readonly DeliveryAttempt[]): DeliveryAttempt | undefined {
+  return attempts.reduce<DeliveryAttempt | undefined>(
+    (latest, attempt) =>
+      !latest || attempt.attemptNumber > latest.attemptNumber ? attempt : latest,
+    undefined,
+  );
+}
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly executionWrites: DeliveryAttemptRpc,
+    private readonly attempts: DeliveryAttemptStore,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -23,16 +55,7 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.executionWrites.markRunning(jobId, workerId);
   }
 
   async markFailed(
@@ -40,41 +63,30 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.executionWrites.markFailed(jobId, errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.executionWrites.markCompleted(jobId, details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.incrementRetry(jobId);
+    return this.executionWrites.retry(jobId);
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return this.jobs.listByBrief(briefId);
+  }
+
+  // Filters on the same derived status the UI shows, so ?status=dlq matches displayStatus.
+  async listByBriefWithDisplayStatus(
+    briefId: string,
+    status: DisplayStatus,
+    now: Date = new Date(),
+  ): Promise<JobRecord[]> {
+    const jobs = await this.jobs.listByBrief(briefId);
+    const statuses = await Promise.all(jobs.map((job) => this.displayStatus(job, now)));
+    return jobs.filter((_, index) => statuses[index] === status);
   }
 
   async ensureWebhookDispatchJob(
@@ -90,13 +102,28 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
-    return job.status ?? "queued";
+  // UI status comes from the latest attempt. jobs.status is the fallback when the
+  // account is off the attempt path (not a pilot, or rolled back) or the job has
+  // no attempt rows: new jobs default to queued, pre-cutover jobs keep theirs.
+  async displayStatus(job: JobRecord, now: Date = new Date()): Promise<DisplayStatus> {
+    if (!job.deliveryJobId || !this.executionWrites.usesAttemptPath(job.accountId)) {
+      return job.status;
+    }
+
+    const latest = latestAttempt(await this.attempts.listAttempts(job.deliveryJobId));
+    if (!latest) {
+      return job.status;
+    }
+
+    const runningFor = now.getTime() - latest.startedAt.getTime();
+    if (latest.status === "running" && runningFor > STUCK_ATTEMPT_THRESHOLD_MS) {
+      return "stuck";
+    }
+
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  async canStartNewDelivery(job: JobRecord, now: Date = new Date()): Promise<boolean> {
+    return (await this.displayStatus(job, now)) !== "running";
   }
 }

@@ -31,6 +31,8 @@ export interface JobRecord {
   parentJobId?: string | undefined;
   type: JobType;
   metadata: JobMetadata;
+  // Link to the immutable delivery_jobs intent; set by the attempt write path.
+  deliveryJobId?: string | undefined;
 
   // Pre-migration shape: intent + execution state co-located on one row.
   status: JobStatus;

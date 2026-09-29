@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { JobRecordService } from "../src/application/job-record-service";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
+import {
+  JobRecordService,
+  STUCK_ATTEMPT_THRESHOLD_MS,
+} from "../src/application/job-record-service";
+import { InMemoryDeliveryAttemptStore } from "../src/infrastructure/repositories/in-memory-delivery-attempt-store";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
@@ -22,10 +27,27 @@ const baseInput: CreateJobInput = {
   },
 };
 
+function createService(
+  repo: JobRepository,
+  pilotAccountIds: ReadonlySet<string> = new Set<string>(),
+  rollbackAccountIds: ReadonlySet<string> = new Set<string>(),
+): JobRecordService {
+  const attempts = new InMemoryDeliveryAttemptStore();
+  return new JobRecordService(
+    repo,
+    new DeliveryAttemptRpc(repo, attempts, { pilotAccountIds, rollbackAccountIds }),
+    attempts,
+  );
+}
+
+function afterStuckThreshold(): Date {
+  return new Date(Date.now() + STUCK_ATTEMPT_THRESHOLD_MS + 1000);
+}
+
 describe("JobRecordService", () => {
   test("reuses canonical job when one already exists", async () => {
     const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const service = createService(repo);
 
     const first = await service.ensureJobRecord(baseInput);
     const second = await service.ensureJobRecord(baseInput);
@@ -35,7 +57,7 @@ describe("JobRecordService", () => {
 
   test("mutates the same row across retries and overwrites terminal execution details", async () => {
     const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const service = createService(repo);
 
     const job = await service.ensureJobRecord(baseInput);
 
@@ -53,7 +75,7 @@ describe("JobRecordService", () => {
 
   test("can produce duplicate intent rows under race conditions", async () => {
     const repo = new RacyJobRepository();
-    const service = new JobRecordService(repo);
+    const service = createService(repo);
 
     const [a, b] = await Promise.all([
       service.ensureJobRecord(baseInput),
@@ -62,6 +84,79 @@ describe("JobRecordService", () => {
 
     expect(a.id).not.toBe(b.id);
     expect(repo.created.length).toBe(2);
+  });
+});
+
+describe("JobRecordService.displayStatus", () => {
+  const pilot = new Set([baseInput.accountId]);
+
+  test("shows queued for a new job with no attempt rows", async () => {
+    const service = createService(new InMemoryJobRepository(), pilot);
+    const job = await service.ensureJobRecord(baseInput);
+
+    expect(await service.displayStatus(job)).toBe("queued");
+  });
+
+  test("reads the status of the latest attempt for pilot accounts", async () => {
+    const service = createService(new InMemoryJobRepository(), pilot);
+    const job = await service.ensureJobRecord(baseInput);
+
+    await service.markRunning(job.id, "worker-us-east-04");
+    await service.markFailed(job.id, "endpoint timeout after 30s");
+    const retried = await service.retry(job.id);
+
+    expect(retried.status).toBe("failed");
+    expect(await service.displayStatus(retried)).toBe("queued");
+  });
+
+  test("shows stuck when the latest running attempt started over 5 minutes ago", async () => {
+    const service = createService(new InMemoryJobRepository(), pilot);
+    const job = await service.ensureJobRecord(baseInput);
+    const running = await service.markRunning(job.id, "worker-us-east-04");
+
+    expect(await service.displayStatus(running)).toBe("running");
+    expect(await service.displayStatus(running, afterStuckThreshold())).toBe("stuck");
+    expect(await service.canStartNewDelivery(running)).toBe(false);
+  });
+
+  test("keeps jobs.status for a pre-cutover job with no attempt rows", async () => {
+    const repo = new InMemoryJobRepository();
+    const legacy = createService(repo);
+    const job = await legacy.ensureJobRecord(baseInput);
+    const completed = await legacy.markCompleted(job.id, { responseStatus: 200 });
+
+    const service = createService(repo, pilot);
+    expect(await service.displayStatus(completed)).toBe("completed");
+  });
+
+  test("falls back to jobs.status for non-pilot accounts", async () => {
+    const service = createService(new InMemoryJobRepository());
+    const job = await service.ensureJobRecord(baseInput);
+    const running = await service.markRunning(job.id, "worker-us-east-04");
+
+    expect(await service.displayStatus(running, afterStuckThreshold())).toBe("running");
+  });
+
+  test("falls back to jobs.status when the rollback flag is on", async () => {
+    const repo = new InMemoryJobRepository();
+    const attempts = new InMemoryDeliveryAttemptStore();
+    const flags = { pilotAccountIds: pilot, rollbackAccountIds: new Set<string>() };
+    const service = new JobRecordService(
+      repo,
+      new DeliveryAttemptRpc(repo, attempts, flags),
+      attempts,
+    );
+    const job = await service.ensureJobRecord(baseInput);
+    await service.markRunning(job.id, "worker-us-east-04");
+    const retried = await service.retry(job.id);
+
+    const rolledBack = new JobRecordService(
+      repo,
+      new DeliveryAttemptRpc(repo, attempts, { ...flags, rollbackAccountIds: pilot }),
+      attempts,
+    );
+    expect(await service.displayStatus(retried)).toBe("queued");
+    expect(await rolledBack.displayStatus(retried)).toBe("running");
   });
 });
 
@@ -129,6 +224,17 @@ class RacyJobRepository implements JobRepository {
       retryCount: existing.retryCount + 1,
       updatedAt: new Date(),
     };
+    this.jobs.set(jobId, updated);
+    return updated;
+  }
+
+  async linkDeliveryJob(jobId: string, deliveryJobId: string): Promise<JobRecord> {
+    const existing = await this.findById(jobId);
+    if (!existing) {
+      throw new Error("not found");
+    }
+
+    const updated: JobRecord = { ...existing, deliveryJobId };
     this.jobs.set(jobId, updated);
     return updated;
   }
