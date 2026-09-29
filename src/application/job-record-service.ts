@@ -1,4 +1,4 @@
-import type { DeliveryAttempt } from "../domain/delivery-attempt";
+import type { DeliveryAttempt, DeliveryAttemptStatus } from "../domain/delivery-attempt";
 import type { DeliveryAttemptStore } from "../domain/delivery-attempt-store";
 import type { JobRepository } from "../domain/job-repository";
 import type {
@@ -6,16 +6,29 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobStatus,
 } from "../domain/job";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 
-export type DisplayStatus = JobStatus | "stuck";
+export type DisplayStatus = DeliveryAttemptStatus | "stuck";
+
+const DISPLAY_STATUSES: readonly DisplayStatus[] = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "dlq",
+  "stuck",
+];
+
+export function isDisplayStatus(value: string): value is DisplayStatus {
+  return (DISPLAY_STATUSES as readonly string[]).includes(value);
+}
 
 // A running attempt whose started_at is older than this is shown as stuck.
 export const STUCK_ATTEMPT_THRESHOLD_MS = 5 * 60 * 1000;
 
-function latestAttempt(attempts: readonly DeliveryAttempt[]): DeliveryAttempt | undefined {
+export function latestAttempt(attempts: readonly DeliveryAttempt[]): DeliveryAttempt | undefined {
   return attempts.reduce<DeliveryAttempt | undefined>(
     (latest, attempt) =>
       !latest || attempt.attemptNumber > latest.attemptNumber ? attempt : latest,
@@ -63,6 +76,17 @@ export class JobRecordService {
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
     return this.jobs.listByBrief(briefId);
+  }
+
+  // Filters on the same derived status the UI shows, so ?status=dlq matches displayStatus.
+  async listByBriefWithDisplayStatus(
+    briefId: string,
+    status: DisplayStatus,
+    now: Date = new Date(),
+  ): Promise<JobRecord[]> {
+    const jobs = await this.jobs.listByBrief(briefId);
+    const statuses = await Promise.all(jobs.map((job) => this.displayStatus(job, now)));
+    return jobs.filter((_, index) => statuses[index] === status);
   }
 
   async ensureWebhookDispatchJob(

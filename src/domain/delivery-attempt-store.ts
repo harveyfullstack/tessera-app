@@ -11,4 +11,5 @@ export interface DeliveryAttemptStore {
   // Assigns the next attempt_number atomically, so racing callers never collide.
   appendAttempt(input: AppendDeliveryAttemptInput): Promise<DeliveryAttempt>;
   listAttempts(deliveryJobId: string): Promise<DeliveryAttempt[]>;
+  findIntent(deliveryJobId: string): Promise<DeliveryJob | null>;
 }

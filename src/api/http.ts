@@ -1,6 +1,7 @@
+import { DeadLetterQueue } from "../application/dead-letter-queue";
 import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
-import { JobRecordService } from "../application/job-record-service";
+import { isDisplayStatus, JobRecordService } from "../application/job-record-service";
 import { InMemoryDeliveryAttemptStore } from "../infrastructure/repositories/in-memory-delivery-attempt-store";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
@@ -9,6 +10,7 @@ const attemptStore = new InMemoryDeliveryAttemptStore();
 const executionWrites = new DeliveryAttemptRpc(jobRepository, attemptStore);
 const jobRecords = new JobRecordService(jobRepository, executionWrites, attemptStore);
 const delivery = new DeliveryOrchestrator(jobRecords);
+const deadLetterQueue = new DeadLetterQueue(jobRecords, attemptStore);
 
 interface DeliverBody {
   briefId: string;
@@ -31,8 +33,18 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const status = url.searchParams.get("status");
+        if (status !== null && !isDisplayStatus(status)) {
+          return Response.json({ error: `Unknown status: ${status}` }, { status: 400 });
+        }
+
+        const [rows, dlq] = await Promise.all([
+          status === null
+            ? jobRecords.listByBrief(briefId)
+            : jobRecords.listByBriefWithDisplayStatus(briefId, status),
+          deadLetterQueue.summarizeBrief(briefId),
+        ]);
+        return Response.json({ jobs: rows, dlq });
       }
     }
 

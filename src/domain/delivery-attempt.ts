@@ -11,8 +11,9 @@ export interface DeliveryJob {
   createdAt: Date;
 }
 
-// delivery_attempts.status is free text in the schema; writes stay within JobStatus.
-export type DeliveryAttemptStatus = JobStatus;
+// delivery_attempts.status is free text in the schema; writes stay within JobStatus
+// plus "dlq", which only exists on the attempt path (jobs.status never holds it).
+export type DeliveryAttemptStatus = JobStatus | "dlq";
 
 // Append-only execution history row. Never updated or deleted.
 export interface DeliveryAttempt {

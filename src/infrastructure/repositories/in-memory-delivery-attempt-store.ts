@@ -16,7 +16,7 @@ function intentKey(key: DeliveryIntentKey): string {
 // per key and strictly increasing attempt numbers under concurrent callers.
 export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
   private readonly intentsByKey = new Map<string, DeliveryJob>();
-  private readonly intentIds = new Set<string>();
+  private readonly intentsById = new Map<string, DeliveryJob>();
   private readonly attempts = new Map<string, readonly DeliveryAttempt[]>();
 
   async ensureIntent(key: DeliveryIntentKey): Promise<DeliveryJob> {
@@ -36,12 +36,12 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
     };
 
     this.intentsByKey.set(intentKey(key), intent);
-    this.intentIds.add(intent.id);
+    this.intentsById.set(intent.id, intent);
     return intent;
   }
 
   async appendAttempt(input: AppendDeliveryAttemptInput): Promise<DeliveryAttempt> {
-    if (!this.intentIds.has(input.deliveryJobId)) {
+    if (!this.intentsById.has(input.deliveryJobId)) {
       throw new Error(`Delivery job not found: ${input.deliveryJobId}`);
     }
 
@@ -64,5 +64,9 @@ export class InMemoryDeliveryAttemptStore implements DeliveryAttemptStore {
 
   async listAttempts(deliveryJobId: string): Promise<DeliveryAttempt[]> {
     return [...(this.attempts.get(deliveryJobId) ?? [])];
+  }
+
+  async findIntent(deliveryJobId: string): Promise<DeliveryJob | null> {
+    return this.intentsById.get(deliveryJobId) ?? null;
   }
 }

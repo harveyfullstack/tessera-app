@@ -10,6 +10,9 @@ import type { JobExecutionDetails, JobRecord } from "../domain/job";
 
 type AttemptFields = Omit<AppendDeliveryAttemptInput, "deliveryJobId">;
 
+// jobs.status has no DLQ value, so the legacy row records a terminal failure.
+export const DEAD_LETTERED_ERROR_MESSAGE = "Retry budget exhausted; moved to the dead letter queue";
+
 // Both sets ship empty. Account ids are supplied at rollout, never hardcoded.
 export const EMPTY_DELIVERY_WRITE_PATH_FLAGS: DeliveryWritePathFlags = {
   pilotAccountIds: new Set<string>(),
@@ -88,6 +91,18 @@ export class DeliveryAttemptRpc {
   async retry(jobId: string): Promise<JobRecord> {
     return this.record(jobId, attemptFields("queued", undefined), () =>
       this.jobs.incrementRetry(jobId),
+    );
+  }
+
+  // Appends a "dlq" attempt with no body, so the DLQ surface's last attempt
+  // bodies stay the delivery failures themselves.
+  async markDeadLettered(jobId: string, workerId: string): Promise<JobRecord> {
+    return this.record(jobId, attemptFields("dlq", { workerId }), () =>
+      this.jobs.updateExecution(jobId, {
+        status: "failed",
+        workerId,
+        errorMessage: DEAD_LETTERED_ERROR_MESSAGE,
+      }),
     );
   }
 
