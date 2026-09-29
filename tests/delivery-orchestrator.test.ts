@@ -7,10 +7,8 @@ import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-mem
 
 function createService(): JobRecordService {
   const jobs = new InMemoryJobRepository();
-  return new JobRecordService(
-    jobs,
-    new DeliveryAttemptRpc(jobs, new InMemoryDeliveryAttemptStore()),
-  );
+  const attempts = new InMemoryDeliveryAttemptStore();
+  return new JobRecordService(jobs, new DeliveryAttemptRpc(jobs, attempts), attempts);
 }
 
 const baseRequest = {

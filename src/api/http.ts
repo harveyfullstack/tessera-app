@@ -5,11 +5,9 @@ import { InMemoryDeliveryAttemptStore } from "../infrastructure/repositories/in-
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const executionWrites = new DeliveryAttemptRpc(
-  jobRepository,
-  new InMemoryDeliveryAttemptStore(),
-);
-const jobRecords = new JobRecordService(jobRepository, executionWrites);
+const attemptStore = new InMemoryDeliveryAttemptStore();
+const executionWrites = new DeliveryAttemptRpc(jobRepository, attemptStore);
+const jobRecords = new JobRecordService(jobRepository, executionWrites, attemptStore);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
