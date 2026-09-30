@@ -28,7 +28,10 @@ export const server = Bun.serve({
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const jobs = await Promise.all(rows.map(async (job) => ({
+          ...job, status: await jobRecords.displayStatus(job),
+        })));
+        return Response.json({ jobs });
       }
     }
 
@@ -46,7 +49,7 @@ export const server = Bun.serve({
         simulateFailure: body.simulateFailure ?? false,
       });
 
-      return Response.json({ job: result });
+      return Response.json({ job: { ...result, status: await jobRecords.displayStatus(result) } });
     }
 
     return new Response("Not found", { status: 404 });

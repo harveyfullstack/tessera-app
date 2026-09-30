@@ -56,13 +56,76 @@ describe("JobRecordService", () => {
   });
 });
 
-function pilot() {
+function pilot(now: () => number = Date.now) {
   const repo = new InMemoryJobRepository();
   const pilotAccounts = new Set([baseInput.accountId]);
   const rollbackAccounts = new Set<string>();
   const rpc = new DeliveryAttemptRpc(repo, { pilotAccounts, rollbackAccounts });
-  return { repo, pilotAccounts, rollbackAccounts, service: new JobRecordService(repo, rpc) };
+  return { repo, pilotAccounts, rollbackAccounts, service: new JobRecordService(repo, rpc, now) };
 }
+
+describe("delivery display status", () => {
+  test("only running attempts older than five minutes become stuck", async () => {
+    let now = 0;
+    const { repo, service } = pilot(() => now);
+    const job = await service.ensureJobRecord(baseInput);
+    await service.markRunning(job.id, "worker");
+    const startedAt = (await repo.listAttempts(job.deliveryJobId))[0]!.startedAt.getTime();
+    now = startedAt + 5 * 60 * 1000 - 1;
+    expect(await service.displayStatus(job)).toBe("running");
+    expect(await service.canStartNewDelivery(job)).toBe(false);
+    now += 1;
+    expect(await service.displayStatus(job)).toBe("running");
+    now += 1;
+    expect(await service.displayStatus(job)).toBe("stuck");
+    expect(await service.canStartNewDelivery(job)).toBe(true);
+    expect((await repo.findById(job.id))!.status).toBe("running");
+    await service.markCompleted(job.id, {});
+    now += 24 * 60 * 60 * 1000;
+    expect(await service.displayStatus(job)).toBe("completed");
+  });
+
+  test("uses latest attempt even when a legacy duplicate has stale status", async () => {
+    const { repo, service } = pilot();
+    const stale = await repo.create(baseInput);
+    const active = await repo.create(baseInput);
+    await service.markFailed(active.id, "timeout");
+    expect(await service.displayStatus(stale)).toBe("failed");
+    await service.retry(active.id);
+    expect(await service.displayStatus(stale)).toBe("queued");
+    await service.markCompleted(active.id, {});
+    expect(await service.displayStatus(stale)).toBe("completed");
+    expect(stale.status).toBe("queued");
+  });
+
+  test("preserves new and pre-cutover status when there is no history", async () => {
+    const { repo, service } = pilot();
+    const job = await repo.create(baseInput);
+    expect(await service.displayStatus(job)).toBe("queued");
+    const legacy = new JobRecordService(repo);
+    const failed = await legacy.markFailed(job.id, "pre-cutover");
+    expect(await service.displayStatus(failed)).toBe("failed");
+    const running = await legacy.markRunning(job.id, "pre-cutover");
+    const future = new JobRecordService(repo, new DeliveryAttemptRpc(repo, {
+      pilotAccounts: new Set([baseInput.accountId]), rollbackAccounts: new Set(),
+    }), () => Date.now() + 24 * 60 * 60 * 1000);
+    expect(await future.displayStatus(running)).toBe("running");
+  });
+
+  test("nonpilot and rollback accounts ignore existing attempt history", async () => {
+    const { repo, service, pilotAccounts, rollbackAccounts } = pilot();
+    const job = await repo.create(baseInput);
+    await service.markFailed(job.id, "pilot attempt");
+    const legacy = new JobRecordService(repo);
+    const completed = await legacy.markCompleted(job.id, {});
+    expect(await service.displayStatus(completed)).toBe("failed");
+    rollbackAccounts.add(baseInput.accountId);
+    expect(await service.displayStatus(completed)).toBe("completed");
+    rollbackAccounts.clear();
+    pilotAccounts.clear();
+    expect(await service.displayStatus(completed)).toBe("completed");
+  });
+});
 
 describe("DeliveryAttemptRpc", () => {
   test("records each execution mutation and ignores caller attempt numbers", async () => {
