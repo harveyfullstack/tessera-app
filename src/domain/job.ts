@@ -5,7 +5,8 @@ export type JobStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "dlq";
 
 export interface JobMetadata {
   customerId: string;
@@ -32,7 +33,9 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  deliveryJobId: string;
+
+  // Retained execution projection makes per-account rollback executable.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
@@ -57,4 +60,43 @@ export interface UpdateJobExecutionInput {
   workerId?: string | undefined;
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
+}
+
+export interface DeliveryJob extends CreateJobInput {
+  id: string;
+  createdAt: Date;
+}
+
+export interface DeliveryAttempt {
+  legacyRetryCount: number;
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  status: JobStatus;
+  startedAt: Date;
+  workerId?: string | undefined;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+}
+
+export type DeliveryExecutionCommand =
+  | { kind: "update"; input: UpdateJobExecutionInput }
+  | { kind: "retry" }
+  | { kind: "drain_dlq"; retryBudget: number };
+
+export interface DeliveryDlqSummary {
+  deliveryJobId: string;
+  endpointUrl: string;
+  retryBudget: number;
+  failureCount: number;
+  pastBudgetCount: number;
+  attempts: DeliveryAttempt[];
+}
+
+export function deliveryFailureCount(history: readonly DeliveryAttempt[], legacyRetryCounts: readonly number[]): number {
+  const baseline = history.reduce<DeliveryAttempt | undefined>((first, row) =>
+    !first || row.attemptNumber < first.attemptNumber ? row : first, undefined)?.legacyRetryCount ?? 0;
+  return Math.max(baseline + history.filter((row) => row.status === "failed").length,
+    0, ...legacyRetryCounts);
 }
