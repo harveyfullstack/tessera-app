@@ -32,7 +32,9 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  deliveryJobId: string;
+
+  // Retained execution projection makes per-account rollback executable.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
@@ -58,3 +60,24 @@ export interface UpdateJobExecutionInput {
   errorMessage?: string | undefined;
   details?: JobExecutionDetails | undefined;
 }
+
+export interface DeliveryJob extends CreateJobInput {
+  id: string;
+  createdAt: Date;
+}
+
+export interface DeliveryAttempt {
+  id: string;
+  deliveryJobId: string;
+  attemptNumber: number;
+  status: JobStatus;
+  startedAt: Date;
+  workerId?: string | undefined;
+  responseStatus?: number | undefined;
+  responseLatencyMs?: number | undefined;
+  errorBody?: string | undefined;
+}
+
+export type DeliveryExecutionCommand =
+  | { kind: "update"; input: UpdateJobExecutionInput }
+  | { kind: "retry" };

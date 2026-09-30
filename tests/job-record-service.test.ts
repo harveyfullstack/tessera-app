@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { JobRecordService } from "../src/application/job-record-service";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
-import type { JobRepository } from "../src/domain/job-repository";
-import type {
-  CreateJobInput,
-  JobRecord,
-  JobType,
-  UpdateJobExecutionInput,
-} from "../src/domain/job";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
+import type { CreateJobInput } from "../src/domain/job";
 
 const baseInput: CreateJobInput = {
   accountId: "acct-1",
@@ -51,89 +46,90 @@ describe("JobRecordService", () => {
     expect(final.errorMessage).toBeUndefined();
   });
 
-  test("can produce duplicate intent rows under race conditions", async () => {
-    const repo = new RacyJobRepository();
+  test("concurrent ensures reuse one account-scoped canonical intent", async () => {
+    const repo = new InMemoryJobRepository();
     const service = new JobRecordService(repo);
-
-    const [a, b] = await Promise.all([
-      service.ensureJobRecord(baseInput),
-      service.ensureJobRecord(baseInput),
-    ]);
-
-    expect(a.id).not.toBe(b.id);
-    expect(repo.created.length).toBe(2);
+    const rows = await Promise.all(Array.from({ length: 20 }, () => service.ensureJobRecord(baseInput)));
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1);
+    const otherAccount = await service.ensureJobRecord({ ...baseInput, accountId: "other" });
+    expect(otherAccount.deliveryJobId).not.toBe(rows[0]!.deliveryJobId);
   });
 });
 
-class RacyJobRepository implements JobRepository {
-  private jobs = new Map<string, JobRecord>();
-  created: JobRecord[] = [];
-
-  async findByBriefAndType(_briefId: string, _type: JobType): Promise<JobRecord[]> {
-    // Stale read window where concurrent callers both observe no row.
-    return [];
-  }
-
-  async findById(jobId: string): Promise<JobRecord | null> {
-    return this.jobs.get(jobId) ?? null;
-  }
-
-  async create(input: CreateJobInput): Promise<JobRecord> {
-    const now = new Date();
-    const id = crypto.randomUUID();
-    const record: JobRecord = {
-      id,
-      accountId: input.accountId,
-      briefId: input.briefId,
-      taskId: input.taskId,
-      parentJobId: input.parentJobId,
-      type: input.type,
-      metadata: input.metadata,
-      status: "queued",
-      retryCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.jobs.set(id, record);
-    this.created.push(record);
-    return record;
-  }
-
-  async updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      status: input.status,
-      workerId: input.workerId,
-      errorMessage: input.errorMessage,
-      updatedAt: new Date(),
-    };
-
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async incrementRetry(jobId: string): Promise<JobRecord> {
-    const existing = await this.findById(jobId);
-    if (!existing) {
-      throw new Error("not found");
-    }
-
-    const updated: JobRecord = {
-      ...existing,
-      retryCount: existing.retryCount + 1,
-      updatedAt: new Date(),
-    };
-    this.jobs.set(jobId, updated);
-    return updated;
-  }
-
-  async listByBrief(briefId: string): Promise<JobRecord[]> {
-    return [...this.jobs.values()].filter((job) => job.briefId === briefId);
-  }
+function pilot() {
+  const repo = new InMemoryJobRepository();
+  const pilotAccounts = new Set([baseInput.accountId]);
+  const rollbackAccounts = new Set<string>();
+  const rpc = new DeliveryAttemptRpc(repo, { pilotAccounts, rollbackAccounts });
+  return { repo, pilotAccounts, rollbackAccounts, service: new JobRecordService(repo, rpc) };
 }
+
+describe("DeliveryAttemptRpc", () => {
+  test("records each execution mutation and ignores caller attempt numbers", async () => {
+    const { repo, service } = pilot();
+    const job = await service.ensureJobRecord(baseInput);
+    const intent = await repo.findDeliveryJob(job.deliveryJobId);
+    await service.markRunning(job.id, "worker-a");
+    await service.markFailed(job.id, "timeout", { attemptNumber: 99, responseStatus: 503, errorBody: "original body" });
+    await service.retry(job.id);
+    await service.markCompleted(job.id, { responseStatus: 200, responseLatencyMs: 18 });
+    const history = await repo.listAttempts(job.deliveryJobId);
+    expect(history.map((row) => row.attemptNumber)).toEqual([1, 2, 3, 4]);
+    expect(history.map((row) => row.status)).toEqual(["running", "failed", "queued", "completed"]);
+    expect(history[1]!.errorBody).toBe("original body");
+    expect(history[3]!.responseLatencyMs).toBe(18);
+    expect(await repo.findDeliveryJob(job.deliveryJobId)).toEqual(intent);
+    expect((await repo.findById(job.id))!.status).toBe("completed");
+    history[1]!.errorBody = "tampered";
+    intent!.metadata.endpointUrl = "tampered";
+    expect((await repo.listAttempts(job.deliveryJobId))[1]!.errorBody).toBe("original body");
+    expect((await repo.findDeliveryJob(job.deliveryJobId))!.metadata.endpointUrl).toBe(baseInput.metadata.endpointUrl);
+  });
+
+  test("racing RPC instances allocate one monotonic sequence across legacy duplicates", async () => {
+    const { repo, service } = pilot();
+    const duplicate = await repo.create(baseInput);
+    const job = await repo.create(baseInput);
+    expect(duplicate.id).not.toBe(job.id);
+    expect(duplicate.deliveryJobId).toBe(job.deliveryJobId);
+    const other = new JobRecordService(repo, new DeliveryAttemptRpc(repo, {
+      pilotAccounts: new Set([baseInput.accountId]), rollbackAccounts: new Set(),
+    }));
+    await Promise.all(Array.from({ length: 50 }, (_, index) =>
+      index % 2 ? service.markRunning(job.id, "one") : other.markFailed(duplicate.id, "two")));
+    const rows = await repo.listAttempts(job.deliveryJobId);
+    expect(rows.map((row) => row.attemptNumber)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    expect(new Set(rows.map((row) => row.id)).size).toBe(50);
+  });
+
+  test("ships disabled, records forward only, and rollback wins over pilot", async () => {
+    const { repo, service, rollbackAccounts } = pilot();
+    const job = await repo.create(baseInput);
+    const legacy = new JobRecordService(repo);
+    await legacy.markFailed(job.id, "before cutover");
+    expect(await repo.listAttempts(job.deliveryJobId)).toEqual([]);
+    await service.markRunning(job.id, "pilot");
+    rollbackAccounts.add(baseInput.accountId);
+    await service.markCompleted(job.id, {});
+    expect((await repo.findById(job.id))!.status).toBe("completed");
+    expect((await repo.listAttempts(job.deliveryJobId)).length).toBe(1);
+    rollbackAccounts.clear();
+    await service.retry(job.id);
+    expect((await repo.listAttempts(job.deliveryJobId)).map((row) => row.attemptNumber)).toEqual([1, 2]);
+    const outside = await service.ensureJobRecord({ ...baseInput, accountId: "outside-pilot" });
+    await service.markRunning(outside.id, "legacy");
+    expect(await repo.listAttempts(outside.deliveryJobId)).toEqual([]);
+  });
+
+  test("missing jobs and invalid attempt details leave history and rollback state unchanged", async () => {
+    const { repo, service } = pilot();
+    await expect(service.markRunning("missing", "worker")).rejects.toThrow();
+    await expect(service.markFailed("missing", "error")).rejects.toThrow();
+    await expect(service.markCompleted("missing", {})).rejects.toThrow();
+    await expect(service.retry("missing")).rejects.toThrow();
+    const job = await repo.create(baseInput);
+    await expect(service.markCompleted(job.id, { responseStatus: 999 })).rejects.toThrow();
+    expect(await repo.listAttempts(job.deliveryJobId)).toEqual([]);
+    expect(await repo.findById(job.id)).toEqual(job);
+  });
+});
