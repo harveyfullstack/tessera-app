@@ -14,7 +14,8 @@ export interface JobRepository {
   ensure(input: CreateJobInput): Promise<JobRecord>;
   findDeliveryJob(deliveryJobId: string): Promise<DeliveryJob | null>;
   listAttempts(deliveryJobId: string): Promise<DeliveryAttempt[]>;
-  // Must atomically allocate and append the attempt and update the legacy projection.
+  // Atomically check drain status/budget, snapshot the initial legacy retry baseline,
+  // allocate and append the attempt, and update the legacy projection.
   execute(jobId: string, command: DeliveryExecutionCommand, appendAttempt: boolean): Promise<JobRecord>;
   listByBrief(briefId: string): Promise<JobRecord[]>;
 }

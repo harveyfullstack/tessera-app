@@ -1,3 +1,4 @@
+import { deliveryFailureCount } from "../../domain/job";
 import { randomUUID } from "crypto";
 import { JobNotFoundError } from "../../domain/errors";
 import type { JobRepository } from "../../domain/job-repository";
@@ -66,6 +67,20 @@ export class InMemoryJobRepository implements JobRepository {
   ): Promise<JobRecord> {
     const job = this.jobs.get(jobId);
     if (!job) throw new JobNotFoundError(jobId);
+    const history = this.attempts.get(job.deliveryJobId) ?? [];
+    // A terminal DLQ intent cannot be restarted through a stale legacy duplicate.
+    if (appendAttempt && history.at(-1)?.status === "dlq") return structuredClone({ ...job, status: "dlq" });
+    const legacyRetryCounts = [...this.jobs.values()]
+      .filter((row) => row.deliveryJobId === job.deliveryJobId).map((row) => row.retryCount);
+    if (command.kind === "drain_dlq") {
+      const currentStatus = appendAttempt ? history.at(-1)?.status ?? job.status : job.status;
+      if (!appendAttempt || job.type !== "dispatch_webhook"
+        || !["failed", "queued"].includes(currentStatus)
+        || deliveryFailureCount(history, legacyRetryCounts) < command.retryBudget) {
+        return structuredClone({ ...job, status: currentStatus });
+      }
+      command = { kind: "update", input: { status: "dlq" } };
+    }
     const now = new Date();
     const input = command.kind === "update" ? command.input : undefined;
     const status = input?.status ?? (appendAttempt ? "queued" : job.status);
@@ -75,13 +90,13 @@ export class InMemoryJobRepository implements JobRepository {
       workerId: input?.workerId ?? input?.details?.workerId ?? job.workerId,
       errorMessage: command.kind === "retry" ? job.errorMessage : input?.errorMessage,
       startedAt: input?.status === "running" ? now : job.startedAt,
-      completedAt: input && ["completed", "failed", "cancelled"].includes(input.status)
+      completedAt: input && ["completed", "failed", "cancelled", "dlq"].includes(input.status)
         ? now : job.completedAt,
     };
-    const history = this.attempts.get(job.deliveryJobId) ?? [];
     const attempt: DeliveryAttempt = {
       id: randomUUID(), deliveryJobId: job.deliveryJobId,
       attemptNumber: history.length + 1, status, startedAt: now,
+      legacyRetryCount: history[0]?.legacyRetryCount ?? Math.max(0, ...legacyRetryCounts),
       workerId: updated.workerId,
       responseStatus: input?.details?.responseStatus,
       responseLatencyMs: input?.details?.responseLatencyMs,

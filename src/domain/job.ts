@@ -5,7 +5,8 @@ export type JobStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "dlq";
 
 export interface JobMetadata {
   customerId: string;
@@ -67,6 +68,7 @@ export interface DeliveryJob extends CreateJobInput {
 }
 
 export interface DeliveryAttempt {
+  legacyRetryCount: number;
   id: string;
   deliveryJobId: string;
   attemptNumber: number;
@@ -80,4 +82,21 @@ export interface DeliveryAttempt {
 
 export type DeliveryExecutionCommand =
   | { kind: "update"; input: UpdateJobExecutionInput }
-  | { kind: "retry" };
+  | { kind: "retry" }
+  | { kind: "drain_dlq"; retryBudget: number };
+
+export interface DeliveryDlqSummary {
+  deliveryJobId: string;
+  endpointUrl: string;
+  retryBudget: number;
+  failureCount: number;
+  pastBudgetCount: number;
+  attempts: DeliveryAttempt[];
+}
+
+export function deliveryFailureCount(history: readonly DeliveryAttempt[], legacyRetryCounts: readonly number[]): number {
+  const baseline = history.reduce<DeliveryAttempt | undefined>((first, row) =>
+    !first || row.attemptNumber < first.attemptNumber ? row : first, undefined)?.legacyRetryCount ?? 0;
+  return Math.max(baseline + history.filter((row) => row.status === "failed").length,
+    0, ...legacyRetryCounts);
+}

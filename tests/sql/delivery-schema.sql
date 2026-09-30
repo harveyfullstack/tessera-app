@@ -67,5 +67,14 @@ BEGIN
   ), 'Deleting intent cannot cascade to history';
 END;
 $$;
+\ir ../../sql/migrations/003_delivery_dlq.sql
+INSERT INTO delivery_attempts (id, delivery_job_id, attempt_number, status, legacy_retry_count) VALUES
+  ('30000000-0000-0000-0000-000000000099', '00000000-0000-0000-0000-000000000001', 3, 'dlq', 7);
+DO $$ BEGIN
+  ASSERT (SELECT status FROM delivery_attempts ORDER BY attempt_number DESC LIMIT 1) = 'dlq';
+  ASSERT (SELECT count(*) FROM jobs) = 5, 'DLQ migration preserves duplicate legacy jobs';
+  ASSERT (SELECT legacy_retry_count FROM delivery_attempts WHERE attempt_number = 3) = 7;
+  ASSERT (SELECT legacy_retry_count FROM delivery_attempts WHERE attempt_number = 1) = 0;
+END; $$;
 RESET search_path;
 DROP SCHEMA delivery_schema_test CASCADE;
