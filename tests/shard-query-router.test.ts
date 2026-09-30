@@ -25,7 +25,7 @@ function shard(
   };
 }
 
-describe("ShardQueryRouter — pre-delivery characterization", () => {
+describe("ShardQueryRouter", () => {
   test("uses only the preferred shard when a healthy replica is available", async () => {
     const preferred = shard("clickhouse-us-east-1a", { kind: "rows", rows: [{ eventId: "evt-1" }] });
     const healthyReplica = shard("clickhouse-us-east-1b", { kind: "rows", rows: [{ eventId: "evt-replica" }] });
@@ -44,7 +44,7 @@ describe("ShardQueryRouter — pre-delivery characterization", () => {
     expect(healthyReplica.calls).toEqual([]); // The healthy replica is available but unused.
   });
 
-  test("exposes a preferred-shard timeout without fallback — post-brief gap: route eligible replicas", async () => {
+  test("exposes a preferred-shard timeout without replica fallback", async () => {
     const preferred = shard("clickhouse-us-east-1a", { kind: "timeout" });
     const healthyReplica = shard("clickhouse-us-east-1b", { kind: "rows", rows: [{ eventId: "evt-replica" }] });
 
@@ -54,10 +54,10 @@ describe("ShardQueryRouter — pre-delivery characterization", () => {
     });
 
     expect(result).toEqual({ kind: "timeout", shardId: "clickhouse-us-east-1a" });
-    expect(healthyReplica.calls).toEqual([]); // Healthy replica is available but unused until the post-brief fallback policy lands.
+    expect(healthyReplica.calls).toEqual([]); // The healthy replica is available but unused.
   });
 
-  test("exposes a preferred-shard blank result without fallback — post-brief gap: retry healthy replicas", async () => {
+  test("exposes a preferred-shard blank result without replica fallback", async () => {
     const preferred = shard("clickhouse-us-east-1a", { kind: "blank" });
     const healthyReplica = shard("clickhouse-us-east-1b", { kind: "rows", rows: [{ eventId: "evt-replica" }] });
 
@@ -67,6 +67,6 @@ describe("ShardQueryRouter — pre-delivery characterization", () => {
     });
 
     expect(result).toEqual({ kind: "blank", shardId: "clickhouse-us-east-1a" });
-    expect(healthyReplica.calls).toEqual([]); // Healthy replica is available but unused; blank-result fallback is intentionally absent.
+    expect(healthyReplica.calls).toEqual([]); // Blank results are returned without consulting the healthy replica.
   });
 });

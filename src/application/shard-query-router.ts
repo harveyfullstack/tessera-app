@@ -15,7 +15,7 @@ export interface ShardQueryRoute<Row> {
 
 export type RoutedShardQueryOutcome<Row> = ShardQueryOutcome<Row> & { shardId: string };
 
-/** Routes reads to the designated shard; replica selection is a later delivery concern. */
+/** Routes reads to the designated shard only; replicas are not consulted. */
 export class ShardQueryRouter<Row> {
   async query(statement: string, route: ShardQueryRoute<Row>): Promise<RoutedShardQueryOutcome<Row>> {
     const outcome = await route.preferred.query(statement);

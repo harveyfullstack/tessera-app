@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseCohortQuery } from "../src/application/cohort-query-parser";
 
-describe("parseCohortQuery — pre-delivery characterization", () => {
+describe("parseCohortQuery", () => {
   test("parses an explicit known field and value", () => {
     expect(parseCohortQuery("customers on the enterprise plan")).toEqual({
       sourceText: "customers on the enterprise plan",
@@ -16,7 +16,7 @@ describe("parseCohortQuery — pre-delivery characterization", () => {
       filters: [{ field: "business_term", operator: "equals", value: "high value" }],
       grounding: { required: false, terms: ["high value"] },
     });
-    // Post-delivery gap: determine whether "high value" means revenue, LTV, or another grounded definition.
+    // "High value" is accepted without resolving whether it means revenue, LTV, or another metric.
   });
 
   test("accepts an unknown business term instead of requiring grounding", () => {
@@ -25,6 +25,6 @@ describe("parseCohortQuery — pre-delivery characterization", () => {
       filters: [{ field: "business_term", operator: "equals", value: "moonshot" }],
       grounding: { required: false, terms: ["moonshot"] },
     });
-    // Post-delivery gap: reject or resolve terms that are absent from the business vocabulary.
+    // Terms absent from the business vocabulary are accepted without grounding.
   });
 });

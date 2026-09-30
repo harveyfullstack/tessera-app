@@ -1,7 +1,7 @@
--- Pre-migration schema. The webhook dispatcher's jobs table mixes immutable
--- intent (which webhook to deliver) and mutable execution state (which attempt
--- last ran, what it returned). The follow-up brief splits these into
--- delivery_jobs (intent) + delivery_attempts (append-only history).
+-- The webhook dispatcher's jobs table mixes immutable delivery intent
+-- (which webhook to deliver) and mutable execution state (which attempt
+-- last ran, what it returned). Each retry updates the same row;
+-- there is no append-only attempt history.
 
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY,
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   type TEXT NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
 
-  -- Mutable execution state on the same row. Target of the migration brief.
+  -- Mutable execution state on the same row.
   status TEXT NOT NULL DEFAULT 'queued',
   worker_id TEXT,
   retry_count INTEGER NOT NULL DEFAULT 0,
@@ -27,6 +27,6 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_account_brief_idx ON jobs (account_id, brief_id);
 CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);
 
--- Intentionally no unique constraint on (brief_id, type) yet. Duplicate intent
--- rows surface during retry races. The follow-up brief adds the constraint
--- and routes all execution writes through an RPC boundary.
+-- No unique constraint on (brief_id, type):
+-- concurrent callers can insert duplicate intent rows
+-- when both lookups miss during a retry race.

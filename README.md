@@ -1,10 +1,10 @@
 # Tessera Product Intelligence
 
-Tessera is a fictional company. This repository is a demo concept for demonstrating software development workflows with Hamster. It is not a production service. All company, customer, and operational details are fictional.
+Tessera Product Intelligence contains modules for event ingestion, webhook delivery tracking, query routing, anomaly rollout, cohort queries, and a mobile event SDK.
 
 ## Application
 
-The TypeScript source models event ingestion, webhook delivery, query routing, anomaly rollout, cohort queries, and a mobile event SDK. Some paths deliberately represent work before a proposed change, so pull requests can demonstrate a real before-and-after workflow.
+The TypeScript application contains the following modules:
 
 - `src/application/`: application services and delivery policies.
 - `src/sdk/`: mobile event collection.

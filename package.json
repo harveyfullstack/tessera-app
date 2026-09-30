@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Fictional product-intelligence application for software workflow demonstrations",
+  "description": "Tessera product-intelligence service",
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",

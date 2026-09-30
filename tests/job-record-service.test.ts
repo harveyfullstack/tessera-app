@@ -46,8 +46,8 @@ describe("JobRecordService", () => {
 
     expect(final.retryCount).toBe(1);
     expect(final.workerId).toBe("worker-us-east-07");
-    // Pre-migration pain: mutable row with no attempt history. The earlier
-    // timeout error is gone the moment the next attempt starts.
+    // Mutable row keeps no attempt history. The earlier timeout error
+    // is cleared when the next attempt starts.
     expect(final.errorMessage).toBeUndefined();
   });
 

@@ -18,7 +18,7 @@ export class JobRecordService {
       return canonical;
     }
 
-    // Pre-migration behavior. If two callers race, duplicate intent rows are possible.
+    // Not atomic: two concurrent callers can both miss the lookup and insert duplicate intent rows.
     return this.jobs.create(input);
   }
 
@@ -91,7 +91,7 @@ export class JobRecordService {
   }
 
   static displayStatus(job: JobRecord): string {
-    // Pre-migration fallback the migration brief intends to remove.
+    // Falls back to the mutable jobs.status column; there is no per-attempt history to derive status from.
     return job.status ?? "queued";
   }
 

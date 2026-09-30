@@ -32,7 +32,7 @@ export interface JobRecord {
   type: JobType;
   metadata: JobMetadata;
 
-  // Pre-migration shape: intent + execution state co-located on one row.
+  // Intent and execution state share one row.
   status: JobStatus;
   workerId?: string | undefined;
   retryCount: number;
