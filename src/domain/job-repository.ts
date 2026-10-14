@@ -11,5 +11,6 @@ export interface JobRepository {
   create(input: CreateJobInput): Promise<JobRecord>;
   updateExecution(jobId: string, input: UpdateJobExecutionInput): Promise<JobRecord>;
   incrementRetry(jobId: string): Promise<JobRecord>;
+  linkDeliveryJob(jobId: string, deliveryJobId: string): Promise<JobRecord>;
   listByBrief(briefId: string): Promise<JobRecord[]>;
 }

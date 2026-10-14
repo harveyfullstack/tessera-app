@@ -1,9 +1,16 @@
+import { DeliveryAttemptRpc, EMPTY_DELIVERY_SPLIT_FLAGS } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
+import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const deliveryAttemptRpc = new DeliveryAttemptRpc(
+  jobRepository,
+  new InMemoryDeliveryAttemptRepository(),
+  EMPTY_DELIVERY_SPLIT_FLAGS,
+);
+const jobRecords = new JobRecordService(jobRepository, deliveryAttemptRpc);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {

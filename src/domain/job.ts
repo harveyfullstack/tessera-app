@@ -29,6 +29,8 @@ export interface JobRecord {
   briefId: string;
   taskId?: string | undefined;
   parentJobId?: string | undefined;
+  /** Maps the row to its delivery_jobs intent; unset until first resolved. */
+  deliveryJobId?: string | undefined;
   type: JobType;
   metadata: JobMetadata;
 

@@ -1,4 +1,5 @@
 import { JobNotFoundError } from "../domain/errors";
+import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
@@ -9,7 +10,10 @@ import type {
 } from "../domain/job";
 
 export class JobRecordService {
-  constructor(private readonly jobs: JobRepository) {}
+  constructor(
+    private readonly jobs: JobRepository,
+    private readonly rpc: DeliveryAttemptRpc,
+  ) {}
 
   async ensureJobRecord(input: CreateJobInput): Promise<JobRecord> {
     const existing = await this.jobs.findByBriefAndType(input.briefId, input.type);
@@ -23,16 +27,7 @@ export class JobRecordService {
   }
 
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "running",
-      workerId,
-      details: { workerId },
-    });
+    return this.rpc.markRunning(await this.requireJob(jobId), workerId);
   }
 
   async markFailed(
@@ -40,37 +35,23 @@ export class JobRecordService {
     errorMessage: string,
     details?: JobExecutionDetails,
   ): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "failed",
-      errorMessage,
-      details,
-    });
+    return this.rpc.markFailed(await this.requireJob(jobId), errorMessage, details);
   }
 
   async markCompleted(jobId: string, details: JobExecutionDetails): Promise<JobRecord> {
-    const existing = await this.jobs.findById(jobId);
-    if (!existing) {
-      throw new JobNotFoundError(jobId);
-    }
-
-    return this.jobs.updateExecution(jobId, {
-      status: "completed",
-      details,
-    });
+    return this.rpc.markCompleted(await this.requireJob(jobId), details);
   }
 
   async retry(jobId: string): Promise<JobRecord> {
+    return this.rpc.retry(await this.requireJob(jobId));
+  }
+
+  private async requireJob(jobId: string): Promise<JobRecord> {
     const existing = await this.jobs.findById(jobId);
     if (!existing) {
       throw new JobNotFoundError(jobId);
     }
-
-    return this.jobs.incrementRetry(jobId);
+    return existing;
   }
 
   async listByBrief(briefId: string): Promise<JobRecord[]> {
