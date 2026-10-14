@@ -4,9 +4,13 @@ import type {
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
+  JobStatus,
 } from "../domain/job";
 import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
+
+export type DisplayStatus = JobStatus | "stuck";
+
+export const STUCK_AFTER_MS = 5 * 60 * 1000;
 
 export class JobRecordService {
   constructor(
@@ -62,13 +66,26 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Falls back to the mutable jobs.status column; there is no per-attempt history to derive status from.
-    return job.status ?? "queued";
+  // UI status: the latest attempt's status, or "stuck" when that attempt has
+  // been running longer than STUCK_AFTER_MS. Jobs without attempt rows (new,
+  // pre-cutover, non-pilot, or rolled back) keep reading jobs.status.
+  async displayStatus(job: JobRecord, now: Date = new Date()): Promise<DisplayStatus> {
+    const latest = await this.attempts.latestAttempt(job);
+    if (!latest) {
+      return job.status;
+    }
+
+    if (
+      latest.status === "running" &&
+      now.getTime() - latest.startedAt.getTime() > STUCK_AFTER_MS
+    ) {
+      return "stuck";
+    }
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
+  async canStartNewDelivery(job: JobRecord): Promise<boolean> {
+    const status = await this.displayStatus(job);
     return status !== "running";
   }
 }

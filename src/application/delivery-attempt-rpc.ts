@@ -22,6 +22,22 @@ export class DeliveryAttemptRpc {
     return this.flags.isSplitEnabled(accountId);
   }
 
+  // Newest attempt for the job's intent, resolved by (accountId, briefId, type).
+  // Null when the account is off the split or the intent has no attempt rows.
+  async latestAttempt(job: JobRecord): Promise<DeliveryAttempt | null> {
+    if (!this.isSplitEnabled(job.accountId)) {
+      return null;
+    }
+
+    const deliveryJob = await this.attempts.findDeliveryJob(job.accountId, job.briefId, job.type);
+    if (!deliveryJob) {
+      return null;
+    }
+
+    const [latest] = await this.attempts.listAttempts(deliveryJob.id);
+    return latest ?? null;
+  }
+
   async markRunning(jobId: string, workerId: string): Promise<JobRecord> {
     const job = await this.requireJob(jobId);
     const updated = await this.jobs.updateExecution(jobId, {
