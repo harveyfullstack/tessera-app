@@ -60,11 +60,19 @@ export class DeliveryAttemptRpc {
    * split flag; callers decide whether attempts are authoritative.
    */
   async latestAttempt(job: JobRecord): Promise<DeliveryAttempt | null> {
-    if (!job.deliveryJobId) {
-      return null;
-    }
-    const rows = await this.attempts.listAttempts(job.deliveryJobId);
+    const rows = await this.listAttempts(job);
     return rows[rows.length - 1] ?? null;
+  }
+
+  /**
+   * The job's attempts ordered by attemptNumber ascending; empty when the job
+   * was never mapped to a delivery intent. Does not check the split flag.
+   */
+  async listAttempts(job: JobRecord): Promise<DeliveryAttempt[]> {
+    if (!job.deliveryJobId) {
+      return [];
+    }
+    return this.attempts.listAttempts(job.deliveryJobId);
   }
 
   async markRunning(job: JobRecord, workerId: string): Promise<JobRecord> {
