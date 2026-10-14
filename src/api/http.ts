@@ -1,5 +1,6 @@
 import { DeliveryAttemptRpc } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
+import { DeliveryRetryBudget } from "../application/delivery-retry-budget";
 import { DeliverySplitFlags } from "../application/delivery-split-flags";
 import { JobRecordService } from "../application/job-record-service";
 import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
@@ -11,7 +12,11 @@ const deliveryAttemptRpc = new DeliveryAttemptRpc(
   new InMemoryDeliveryAttemptRepository(),
   DeliverySplitFlags.fromEnv(process.env),
 );
-const jobRecords = new JobRecordService(jobRepository, deliveryAttemptRpc);
+const jobRecords = new JobRecordService(
+  jobRepository,
+  deliveryAttemptRpc,
+  DeliveryRetryBudget.fromEnv(process.env),
+);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -27,6 +32,9 @@ interface DeliverBody {
 
 const accountId = "tessera-demo-account";
 
+// ?status=dlq narrows the listing to DLQ-bound jobs; other values leave it unfiltered.
+const DLQ_STATUS_FILTER = "dlq";
+
 export const server = Bun.serve({
   port: Number(process.env.PORT ?? "8787"),
   async fetch(req) {
@@ -36,7 +44,12 @@ export const server = Bun.serve({
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
         const rows = await jobRecords.listByBrief(briefId);
-        return Response.json({ jobs: rows });
+        const dlq = await jobRecords.dlqSummary(rows);
+        if (url.searchParams.get("status") === DLQ_STATUS_FILTER) {
+          const dlqJobIds = new Set(dlq.entries.map((entry) => entry.jobId));
+          return Response.json({ jobs: rows.filter((row) => dlqJobIds.has(row.id)), dlq });
+        }
+        return Response.json({ jobs: rows, dlq });
       }
     }
 
