@@ -7,6 +7,9 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+/** UI-facing status: a job status, or "stuck" for a running attempt past the threshold. */
+export type DisplayStatus = JobStatus | "stuck";
+
 export interface JobMetadata {
   customerId: string;
   subscriptionId: string;

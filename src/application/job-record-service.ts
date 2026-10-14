@@ -3,11 +3,14 @@ import type { DeliveryAttemptRpc } from "./delivery-attempt-rpc";
 import type { JobRepository } from "../domain/job-repository";
 import type {
   CreateJobInput,
+  DisplayStatus,
   JobExecutionDetails,
   JobMetadata,
   JobRecord,
-  JobType,
 } from "../domain/job";
+
+/** A running attempt whose started_at is older than this is shown as stuck. */
+export const STUCK_ATTEMPT_THRESHOLD_MS = 5 * 60 * 1000;
 
 export class JobRecordService {
   constructor(
@@ -71,13 +74,32 @@ export class JobRecordService {
     });
   }
 
-  static displayStatus(job: JobRecord): string {
-    // Falls back to the mutable jobs.status column; there is no per-attempt history to derive status from.
-    return job.status ?? "queued";
+  /**
+   * Status shown in the UI. On the attempt path the latest delivery_attempts
+   * row is authoritative; a running attempt older than the stuck threshold is
+   * reported as stuck. Jobs with no attempt rows (new or pre-cutover), and
+   * accounts outside the pilot or under rollback, fall back to jobs.status.
+   */
+  async displayStatus(job: JobRecord, now: Date = new Date()): Promise<DisplayStatus> {
+    if (!this.rpc.usesAttemptPath(job.accountId)) {
+      return job.status;
+    }
+
+    const latest = await this.rpc.latestAttempt(job);
+    if (!latest) {
+      return job.status;
+    }
+
+    const runningFor = now.getTime() - latest.startedAt.getTime();
+    if (latest.status === "running" && runningFor > STUCK_ATTEMPT_THRESHOLD_MS) {
+      return "stuck";
+    }
+    return latest.status;
   }
 
-  static canStartNewDelivery(job: JobRecord): boolean {
-    const status = JobRecordService.displayStatus(job) as JobType | string;
-    return status !== "running";
+  async canStartNewDelivery(job: JobRecord, now: Date = new Date()): Promise<boolean> {
+    const status = await this.displayStatus(job, now);
+    // A stuck attempt is still running as far as storage knows.
+    return status !== "running" && status !== "stuck";
   }
 }

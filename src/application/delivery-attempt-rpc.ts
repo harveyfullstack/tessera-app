@@ -54,6 +54,19 @@ export class DeliveryAttemptRpc {
     return this.flags.pilotAccountIds.has(accountId);
   }
 
+  /**
+   * Highest-numbered attempt for the job, or null when the job was never
+   * mapped to a delivery intent or has no attempt rows. Does not check the
+   * split flag; callers decide whether attempts are authoritative.
+   */
+  async latestAttempt(job: JobRecord): Promise<DeliveryAttempt | null> {
+    if (!job.deliveryJobId) {
+      return null;
+    }
+    const rows = await this.attempts.listAttempts(job.deliveryJobId);
+    return rows[rows.length - 1] ?? null;
+  }
+
   async markRunning(job: JobRecord, workerId: string): Promise<JobRecord> {
     return this.write(job, { status: "running", workerId }, () =>
       this.jobs.updateExecution(job.id, {
