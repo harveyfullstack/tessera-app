@@ -12,6 +12,7 @@ The TypeScript application contains the following modules:
 - `src/infrastructure/`: repository implementations.
 - `sql/`: database schema and migrations.
 - `tests/`: behavior and regression checks.
+- `web/`: the webhook Deliveries dashboard, a static page that Vercel serves (`vercel.json`).
 
 ## Mobile SDK startup contract
 

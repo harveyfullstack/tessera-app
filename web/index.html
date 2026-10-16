@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deliveries · Tessera</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Tessera</span>
+      </div>
+      <nav class="nav">
+        <a href="#">Insights</a>
+        <a href="#">Events</a>
+        <a href="#" class="active" aria-current="page">Deliveries</a>
+        <a href="#">Settings</a>
+      </nav>
+    </header>
+
+    <main class="page">
+      <div class="page-head">
+        <div>
+          <h1>Webhook deliveries</h1>
+          <p class="subtle" id="window-label"></p>
+        </div>
+      </div>
+
+      <section class="kpis" id="kpis" aria-label="Delivery totals"></section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Endpoints</h2>
+        </div>
+        <table class="endpoints">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Endpoint</th>
+              <th>Event</th>
+              <th>Attempts</th>
+              <th>Last attempt</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="endpoint-rows"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="/data.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,77 @@
+// Webhook delivery snapshot rendered by the Deliveries page.
+// Status values: "delivered", "retrying", "dead_letter".
+window.TESSERA_DELIVERIES = {
+  window: "Last 24 hours",
+  totals: {
+    deliveries: 182406,
+    successRate: 99.2,
+    medianLatencyMs: 340,
+    retrying: 37,
+  },
+  endpoints: [
+    {
+      customer: "Northwind Mobile",
+      url: "https://hooks.northwind.app/tessera/events",
+      eventType: "insight.created",
+      lastAttempt: "2 min ago",
+      attempts: 1,
+      status: "delivered",
+    },
+    {
+      customer: "Lumen Pay",
+      url: "https://api.lumenpay.io/webhooks/tessera",
+      eventType: "anomaly.detected",
+      lastAttempt: "4 min ago",
+      attempts: 8,
+      status: "dead_letter",
+    },
+    {
+      customer: "Arcadia Games",
+      url: "https://ingest.arcadia.gg/hooks/tessera",
+      eventType: "cohort.updated",
+      lastAttempt: "6 min ago",
+      attempts: 3,
+      status: "retrying",
+    },
+    {
+      customer: "Fieldnote",
+      url: "https://fieldnote.dev/api/tessera-webhook",
+      eventType: "insight.created",
+      lastAttempt: "9 min ago",
+      attempts: 1,
+      status: "delivered",
+    },
+    {
+      customer: "Orbital Health",
+      url: "https://hooks.orbital.health/v2/tessera",
+      eventType: "anomaly.detected",
+      lastAttempt: "12 min ago",
+      attempts: 8,
+      status: "dead_letter",
+    },
+    {
+      customer: "Kestrel AI",
+      url: "https://gateway.kestrel.ai/webhooks/events",
+      eventType: "export.ready",
+      lastAttempt: "15 min ago",
+      attempts: 1,
+      status: "delivered",
+    },
+    {
+      customer: "Brightline Retail",
+      url: "https://brightline.shop/integrations/tessera",
+      eventType: "cohort.updated",
+      lastAttempt: "21 min ago",
+      attempts: 8,
+      status: "dead_letter",
+    },
+    {
+      customer: "Quill Docs",
+      url: "https://quill.so/hooks/tessera",
+      eventType: "insight.created",
+      lastAttempt: "26 min ago",
+      attempts: 1,
+      status: "delivered",
+    },
+  ],
+};
