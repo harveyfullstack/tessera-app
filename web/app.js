@@ -28,6 +28,18 @@
     )
     .join("");
 
+  const deadLettered = data.endpoints.filter((endpoint) => endpoint.status === "dead_letter");
+  const alert = document.getElementById("dlq-alert");
+  if (deadLettered.length > 0) {
+    alert.innerHTML = `
+      <div class="dlq-alert-copy">
+        <strong>${deadLettered.length} endpoints are in the dead-letter queue</strong>
+        <span>${deadLettered.map((endpoint) => endpoint.customer).join(", ")} stopped receiving events after 8 attempts.</span>
+      </div>
+      <button type="button" class="dlq-alert-action">Drain queue</button>`;
+    alert.hidden = false;
+  }
+
   document.getElementById("endpoint-rows").innerHTML = data.endpoints
     .map(
       (endpoint) => `

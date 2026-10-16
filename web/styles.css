@@ -11,6 +11,10 @@
   --amber-text: #9a5b00;
   --grey-bg: #eef0f3;
   --grey-text: #4b5563;
+  --red-bg: #fdecec;
+  --red-border: #f5b5b5;
+  --red-text: #9b1c1c;
+  --red-solid: #c81e1e;
   font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -180,6 +184,44 @@ body {
 }
 
 .pill-dead_letter {
-  background: var(--grey-bg);
-  color: var(--grey-text);
+  background: var(--red-bg);
+  color: var(--red-text);
+}
+
+.dlq-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  color: var(--red-text);
+}
+
+.dlq-alert[hidden] {
+  display: none;
+}
+
+.dlq-alert-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13.5px;
+}
+
+.dlq-alert-copy strong {
+  font-size: 15px;
+}
+
+.dlq-alert-action {
+  background: var(--red-solid);
+  color: #ffffff;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
