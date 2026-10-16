@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { DeliveryAttemptRpc } from "../src/application/delivery-attempt-rpc";
 import { JobRecordService } from "../src/application/job-record-service";
+import { InMemoryDeliveryAttemptRepository } from "../src/infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../src/infrastructure/repositories/in-memory-job-repository";
 import type { JobRepository } from "../src/domain/job-repository";
 import type {
@@ -22,10 +24,14 @@ const baseInput: CreateJobInput = {
   },
 };
 
+function serviceFor(repo: JobRepository): JobRecordService {
+  return new JobRecordService(repo, new DeliveryAttemptRpc(repo, new InMemoryDeliveryAttemptRepository()));
+}
+
 describe("JobRecordService", () => {
   test("reuses canonical job when one already exists", async () => {
     const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const service = serviceFor(repo);
 
     const first = await service.ensureJobRecord(baseInput);
     const second = await service.ensureJobRecord(baseInput);
@@ -35,7 +41,7 @@ describe("JobRecordService", () => {
 
   test("mutates the same row across retries and overwrites terminal execution details", async () => {
     const repo = new InMemoryJobRepository();
-    const service = new JobRecordService(repo);
+    const service = serviceFor(repo);
 
     const job = await service.ensureJobRecord(baseInput);
 
@@ -53,7 +59,7 @@ describe("JobRecordService", () => {
 
   test("can produce duplicate intent rows under race conditions", async () => {
     const repo = new RacyJobRepository();
-    const service = new JobRecordService(repo);
+    const service = serviceFor(repo);
 
     const [a, b] = await Promise.all([
       service.ensureJobRecord(baseInput),
@@ -129,6 +135,17 @@ class RacyJobRepository implements JobRepository {
       retryCount: existing.retryCount + 1,
       updatedAt: new Date(),
     };
+    this.jobs.set(jobId, updated);
+    return updated;
+  }
+
+  async linkDeliveryJob(jobId: string, deliveryJobId: string): Promise<JobRecord> {
+    const existing = await this.findById(jobId);
+    if (!existing) {
+      throw new Error("not found");
+    }
+
+    const updated: JobRecord = { ...existing, deliveryJobId };
     this.jobs.set(jobId, updated);
     return updated;
   }

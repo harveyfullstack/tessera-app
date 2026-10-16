@@ -1,9 +1,21 @@
+import { DEFAULT_RETRY_BUDGET_CONFIG } from "../application/dead-letter-queue";
+import { DeliveryAttemptRpc, EMPTY_DELIVERY_SPLIT_FLAGS } from "../application/delivery-attempt-rpc";
 import { DeliveryOrchestrator } from "../application/delivery-orchestrator";
 import { JobRecordService } from "../application/job-record-service";
+import { InMemoryDeliveryAttemptRepository } from "../infrastructure/repositories/in-memory-delivery-attempt-repository";
 import { InMemoryJobRepository } from "../infrastructure/repositories/in-memory-job-repository";
 
 const jobRepository = new InMemoryJobRepository();
-const jobRecords = new JobRecordService(jobRepository);
+const deliveryAttemptRpc = new DeliveryAttemptRpc(
+  jobRepository,
+  new InMemoryDeliveryAttemptRepository(),
+  EMPTY_DELIVERY_SPLIT_FLAGS,
+);
+const jobRecords = new JobRecordService(
+  jobRepository,
+  deliveryAttemptRpc,
+  DEFAULT_RETRY_BUDGET_CONFIG,
+);
 const delivery = new DeliveryOrchestrator(jobRecords);
 
 interface DeliverBody {
@@ -27,7 +39,11 @@ export const server = Bun.serve({
     if (req.method === "GET" && url.pathname.startsWith("/briefs/")) {
       const [, briefs, briefId, jobs] = url.pathname.split("/");
       if (briefs === "briefs" && briefId && jobs === "jobs") {
-        const rows = await jobRecords.listByBrief(briefId);
+        const status = url.searchParams.get("status");
+        if (status !== null && status !== "dlq") {
+          return Response.json({ error: `Unsupported status filter: ${status}` }, { status: 400 });
+        }
+        const rows = await jobRecords.listByBrief(briefId, status === "dlq" ? { status } : {});
         return Response.json({ jobs: rows });
       }
     }

@@ -7,6 +7,9 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+/** UI-facing status: a job status, or "stuck" for a running attempt past the threshold. */
+export type DisplayStatus = JobStatus | "stuck";
+
 export interface JobMetadata {
   customerId: string;
   subscriptionId: string;
@@ -29,6 +32,8 @@ export interface JobRecord {
   briefId: string;
   taskId?: string | undefined;
   parentJobId?: string | undefined;
+  /** Maps the row to its delivery_jobs intent; unset until first resolved. */
+  deliveryJobId?: string | undefined;
   type: JobType;
   metadata: JobMetadata;
 
